@@ -2,6 +2,7 @@ package bootc
 
 import (
 	"encoding/json"
+	"fmt"
 	"os/exec"
 )
 
@@ -48,4 +49,25 @@ func ProbeStatus() *Status {
 		status.Digest = booted.Image.Digest
 	}
 	return status
+}
+
+func Switch(imageRef, digest string) error {
+	ref := fmt.Sprintf("%s@%s", imageRef, digest)
+	out, err := exec.Command("bootc", "switch", "--apply", ref).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("bootc switch failed: %s", string(out))
+	}
+	return nil
+}
+
+func Rollback() error {
+	out, err := exec.Command("bootc", "rollback").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("bootc rollback failed: %s", string(out))
+	}
+	return Reboot()
+}
+
+func Reboot() error {
+	return exec.Command("systemctl", "reboot").Run()
 }

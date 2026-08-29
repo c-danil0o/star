@@ -1,13 +1,16 @@
 package startup
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net"
+	"slices"
 
 	kuiperapi "github.com/c12s/kuiper/pkg/api"
 	magnetarapi "github.com/c12s/magnetar/pkg/api"
 	meridianapi "github.com/c12s/meridian/pkg/api"
+	"github.com/c12s/star/internal/bootc"
 	"github.com/c12s/star/internal/configs"
 	"github.com/c12s/star/internal/servers"
 	"github.com/c12s/star/internal/services"
@@ -84,6 +87,13 @@ func (a *app) init() {
 		log.Fatalln(err)
 	}
 
+	if slices.Contains(capabilities, magnetarapi.CapabilityOsUpdate) {
+		log.Println("starting bootc module")
+		ctx, cancel := context.WithCancel(context.Background())
+		a.shutdownProcesses = append(a.shutdownProcesses, cancel)
+		go a.startBootcPoller(ctx)
+	}
+
 	configStore, err := store.NewConfigInMemStore()
 	if err != nil {
 		log.Fatalln(err)
@@ -126,6 +136,11 @@ func (a *app) init() {
 	api.RegisterStarConfigServer(s, configGrpcServer)
 	reflection.Register(s)
 	a.grpcServer = s
+}
+
+func (a *app) startBootcPoller(ctx context.Context) {
+	poller := bootc.NewPoller(a.config.OsPollInterval(), bootc.StateDir(), nil)
+	poller.Run(ctx)
 }
 
 func (a *app) startSerfAgent() error {

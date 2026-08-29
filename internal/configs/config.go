@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -15,6 +16,7 @@ type Config struct {
 	grpcServerAddress                  string
 	serfBindAddress                    string
 	serfBindPort                       int
+	osPollInterval                     time.Duration
 }
 
 func (c *Config) NatsAddress() string {
@@ -49,6 +51,10 @@ func (c *Config) SerfBindPort() int {
 	return c.serfBindPort
 }
 
+func (c *Config) OsPollInterval() time.Duration {
+	return c.osPollInterval
+}
+
 const (
 	defaultNodeIdDirPath = "/var/lib/c12s"
 	defaultNodeIdFile    = "nodeid"
@@ -78,6 +84,11 @@ func NewFromEnv() (*Config, error) {
 	if nodeIdFileName == "" {
 		nodeIdFileName = defaultNodeIdFile
 	}
+	osPollInterval, err := time.ParseDuration(os.Getenv("OS_POLL_INTERVAL"))
+	if err != nil {
+		log.Println(err)
+		osPollInterval = 30 * time.Second
+	}
 	return &Config{
 		natsAddress:                        os.Getenv("NATS_ADDRESS"),
 		registrationReqTimeoutMilliseconds: int64(registrationReqTimeoutMilliseconds),
@@ -87,5 +98,6 @@ func NewFromEnv() (*Config, error) {
 		grpcServerAddress:                  os.Getenv("STAR_ADDRESS"),
 		serfBindAddress:                    os.Getenv("BIND_ADDRESS"),
 		serfBindPort:                       serfBindPort,
+		osPollInterval:                     osPollInterval,
 	}, nil
 }
