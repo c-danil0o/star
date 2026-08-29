@@ -34,6 +34,12 @@ func (s *DesiredStore) Get() *DesiredImage {
 	return s.desired
 }
 
+func (s *DesiredStore) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.desired = nil
+}
+
 type Attempt struct {
 	Image     string `json:"image"`
 	Digest    string `json:"digest"`

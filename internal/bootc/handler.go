@@ -35,6 +35,22 @@ func (h *Handler) Serve() error {
 			log.Printf("[os_update] invalid command: %s", err)
 			return
 		}
+		if cmd.Rollback {
+			log.Println("[os_update] rollback command received")
+			if len(msg.Reply) > 0 {
+				ack, err := proto.Marshal(&agent_queue.OSUpdateAck{})
+				if err == nil {
+					_ = h.conn.Publish(msg.Reply, ack)
+				}
+			}
+			h.desired.Clear()
+			go func() {
+				if err := Rollback(); err != nil {
+					log.Printf("[os_update] rollback failed: %s", err)
+				}
+			}()
+			return
+		}
 		if cmd.Digest == "" || cmd.ImageRef == "" {
 			log.Println("[os_update] command missing image_ref or digest, ignoring")
 			return
