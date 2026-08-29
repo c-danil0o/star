@@ -49,6 +49,11 @@ func (c *Config) SerfBindPort() int {
 	return c.serfBindPort
 }
 
+const (
+	defaultNodeIdDirPath = "/var/lib/c12s"
+	defaultNodeIdFile    = "nodeid"
+)
+
 func NewFromEnv() (*Config, error) {
 	registrationReqTimeoutMilliseconds, err := strconv.Atoi(os.Getenv("REGISTRATION_REQ_TIMEOUT_MILLISECONDS"))
 	if err != nil {
@@ -65,12 +70,20 @@ func NewFromEnv() (*Config, error) {
 		log.Println(err)
 		serfBindPort = 7946
 	}
+	nodeIdDirPath := os.Getenv("NODE_ID_DIR_PATH")
+	if nodeIdDirPath == "" {
+		nodeIdDirPath = defaultNodeIdDirPath
+	}
+	nodeIdFileName := os.Getenv("NODE_ID_FILE_NAME")
+	if nodeIdFileName == "" {
+		nodeIdFileName = defaultNodeIdFile
+	}
 	return &Config{
 		natsAddress:                        os.Getenv("NATS_ADDRESS"),
 		registrationReqTimeoutMilliseconds: int64(registrationReqTimeoutMilliseconds),
 		maxRegistrationRetries:             int8(maxRegistrationRetries),
-		nodeIdDirPath:                      os.Getenv("NODE_ID_DIR_PATH"),
-		nodeIdFileName:                     os.Getenv("NODE_ID_FILE_NAME"),
+		nodeIdDirPath:                      nodeIdDirPath,
+		nodeIdFileName:                     nodeIdFileName,
 		grpcServerAddress:                  os.Getenv("STAR_ADDRESS"),
 		serfBindAddress:                    os.Getenv("BIND_ADDRESS"),
 		serfBindPort:                       serfBindPort,

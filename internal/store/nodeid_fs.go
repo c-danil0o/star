@@ -17,6 +17,10 @@ type nodeIdFSStore struct {
 }
 
 func NewNodeIdFSStore(dirPath, fileName string) (domain.NodeIdStore, error) {
+	err := os.MkdirAll(dirPath, 0755)
+	if err != nil {
+		return nil, err
+	}
 	return &nodeIdFSStore{
 		dirPath:         dirPath,
 		fileName:        fileName,
