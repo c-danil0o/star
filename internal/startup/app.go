@@ -59,7 +59,9 @@ func (a *app) init() {
 
 	registrationService := services.NewRegistrationService(registrationClient, nodeIdStore)
 	if !registrationService.Registered() {
-		err := registrationService.Register(a.config.MaxRegistrationRetries(), a.config.SerfBindAddress())
+		capabilities := discoverCapabilities()
+		log.Println("discovered capabilities: ", capabilities)
+		err := registrationService.Register(a.config.MaxRegistrationRetries(), a.config.SerfBindAddress(), capabilities)
 		if err != nil {
 			log.Fatalln(err)
 		}
