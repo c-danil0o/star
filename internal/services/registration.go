@@ -22,12 +22,12 @@ func NewRegistrationService(client *magnetarapi.RegistrationAsyncClient, nodeIdR
 	}
 }
 
-func (rs *RegistrationService) Register(maxRetries int8, bindAddress string, capabilities []string) error {
+func (rs *RegistrationService) Register(maxRetries int8, bindAddress string, capabilities []string, osStatus *magnetarapi.OsStatus) error {
 	err := rs.nodeIdRepo.PutClusterId("")
 	if err != nil {
 		log.Fatal(err)
 	}
-	req := rs.buildReq(bindAddress, capabilities)
+	req := rs.buildReq(bindAddress, capabilities, osStatus)
 	for attemptsLeft := maxRetries; attemptsLeft > 0; attemptsLeft-- {
 		errChan := make(chan error)
 		err := rs.tryRegister(req, errChan)
@@ -49,9 +49,10 @@ func (rs *RegistrationService) tryRegister(req *magnetarapi.RegistrationReq, err
 	return err
 }
 
-func (rs *RegistrationService) buildReq(bindAddress string, capabilities []string) *magnetarapi.RegistrationReq {
+func (rs *RegistrationService) buildReq(bindAddress string, capabilities []string, osStatus *magnetarapi.OsStatus) *magnetarapi.RegistrationReq {
 	builder := magnetarapi.NewRegistrationReqBuilder()
 	builder = builder.AddCapabilities(capabilities...)
+	builder = builder.SetOsStatus(osStatus)
 	cpuCores, err := cpuCores()
 	if err == nil {
 		builder = builder.AddFloat64Label("cpu-cores", cpuCores)

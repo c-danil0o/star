@@ -7,6 +7,7 @@ import (
 	"time"
 
 	magnetarapi "github.com/c12s/magnetar/pkg/api"
+	"github.com/c12s/star/internal/bootc"
 )
 
 const libvirtSocketPath = "/var/run/libvirt/libvirt-sock"
@@ -32,11 +33,12 @@ func libvirtSocketExists() bool {
 	return err == nil
 }
 
-func syncNodeState(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, capabilities []string) error {
+func syncNodeState(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, capabilities []string, osStatus *magnetarapi.OsStatus) error {
 	errChan := make(chan error)
 	req := &magnetarapi.NodeUpdateReq{
 		NodeId:       nodeId,
 		Capabilities: capabilities,
+		OsStatus:     osStatus,
 	}
 	err := client.Update(req, func(resp *magnetarapi.NodeUpdateResp) {
 		errChan <- nil
@@ -50,5 +52,18 @@ func syncNodeState(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, cap
 	case <-time.After(30 * time.Second):
 		log.Println("node state sync timed out")
 		return nil
+	}
+}
+
+func buildOsStatus() *magnetarapi.OsStatus {
+	bootcStatus := bootc.ProbeStatus()
+	if bootcStatus == nil {
+		return nil
+	}
+	return &magnetarapi.OsStatus{
+		BootedImage:   bootcStatus.Image,
+		BootedDigest:  bootcStatus.Digest,
+		BootedVersion: bootcStatus.Version,
+		Phase:         magnetarapi.OsPhaseHealthy,
 	}
 }

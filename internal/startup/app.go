@@ -58,11 +58,12 @@ func (a *app) init() {
 	}
 
 	capabilities := discoverCapabilities()
+	osStatus := buildOsStatus()
 	log.Println("node capabilities: ", capabilities)
 
 	registrationService := services.NewRegistrationService(registrationClient, nodeIdStore)
 	if !registrationService.Registered() {
-		err := registrationService.Register(a.config.MaxRegistrationRetries(), a.config.SerfBindAddress(), capabilities)
+		err := registrationService.Register(a.config.MaxRegistrationRetries(), a.config.SerfBindAddress(), capabilities, osStatus)
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -78,7 +79,7 @@ func (a *app) init() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	err = syncNodeState(nodeUpdateClient, nodeId.Value, capabilities)
+	err = syncNodeState(nodeUpdateClient, nodeId.Value, capabilities, osStatus)
 	if err != nil {
 		log.Fatalln(err)
 	}
