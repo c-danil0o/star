@@ -57,10 +57,11 @@ func (a *app) init() {
 		log.Fatalln(err)
 	}
 
+	capabilities := discoverCapabilities()
+	log.Println("node capabilities: ", capabilities)
+
 	registrationService := services.NewRegistrationService(registrationClient, nodeIdStore)
 	if !registrationService.Registered() {
-		capabilities := discoverCapabilities()
-		log.Println("discovered capabilities: ", capabilities)
 		err := registrationService.Register(a.config.MaxRegistrationRetries(), a.config.SerfBindAddress(), capabilities)
 		if err != nil {
 			log.Fatalln(err)
@@ -72,6 +73,15 @@ func (a *app) init() {
 		log.Fatalln(err)
 	}
 	log.Println("NODE ID: " + nodeId.Value)
+
+	nodeUpdateClient, err := magnetarapi.NewNodeUpdateAsyncClient(a.config.NatsAddress())
+	if err != nil {
+		log.Fatalln(err)
+	}
+	err = syncNodeState(nodeUpdateClient, nodeId.Value, capabilities)
+	if err != nil {
+		log.Fatalln(err)
+	}
 
 	configStore, err := store.NewConfigInMemStore()
 	if err != nil {
