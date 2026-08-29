@@ -28,6 +28,7 @@ type app struct {
 	shutdownProcesses    []func()
 	serfAgent            *services.SerfAgent
 	clusterJoinListener  *services.ClusterJoinListener
+	bootcHandler         *bootc.Handler
 }
 
 func NewAppWithConfig(config *configs.Config) (*app, error) {
@@ -91,7 +92,18 @@ func (a *app) init() {
 		log.Println("starting bootc module")
 		ctx, cancel := context.WithCancel(context.Background())
 		a.shutdownProcesses = append(a.shutdownProcesses, cancel)
-		go a.startBootcPoller(ctx)
+
+		poller := bootc.NewPoller(a.config.OsPollInterval(), bootc.StateDir(), nil)
+		reporter := bootc.NewReporter(nodeUpdateClient, nodeId.Value, poller.Attempts())
+		poller.SetStatusHandler(reporter.Report)
+		handler := bootc.NewHandler(natsConn, nodeId.Value, poller.Desired())
+		err = handler.Serve()
+		if err != nil {
+			log.Fatalln(err)
+		}
+		a.bootcHandler = handler
+
+		go poller.Run(ctx)
 	}
 
 	configStore, err := store.NewConfigInMemStore()
@@ -200,6 +212,9 @@ func (a *app) GracefulStop() {
 	go a.configAsyncServer.GracefulStop()
 	a.grpcServer.GracefulStop()
 	a.serfAgent.Leave()
+	if a.bootcHandler != nil {
+		a.bootcHandler.GracefulStop()
+	}
 	for _, shudownProcess := range a.shutdownProcesses {
 		shudownProcess()
 	}

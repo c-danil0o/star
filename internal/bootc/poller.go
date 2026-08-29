@@ -35,6 +35,10 @@ func (p *Poller) Attempts() *AttemptStore {
 	return p.attempts
 }
 
+func (p *Poller) SetStatusHandler(handler StatusCallback) {
+	p.statusHandler = handler
+}
+
 func (p *Poller) report(phase string, message string) {
 	if p.statusHandler != nil {
 		p.statusHandler(phase, message)

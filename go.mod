@@ -5,10 +5,10 @@ go 1.22.3
 require (
 	github.com/c12s/kuiper v1.0.0
 	github.com/c12s/magnetar v1.0.0
+	github.com/c12s/meridian v1.0.0
 	github.com/hashicorp/serf v0.10.1
 	github.com/nats-io/nats.go v1.31.0
 	github.com/shirou/gopsutil v3.21.11+incompatible
-	github.com/c12s/meridian v1.0.0
 )
 
 require (
@@ -26,8 +26,9 @@ require (
 )
 
 require (
+	github.com/c12s/agent_queue v0.0.0
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/golang/protobuf v1.5.4
 	github.com/klauspost/compress v1.17.0 // indirect
 	github.com/nats-io/nkeys v0.4.5 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
@@ -51,3 +52,5 @@ replace github.com/c12s/kuiper => ../kuiper
 replace github.com/c12s/oort => ../oort
 
 replace github.com/c12s/meridian => ../meridian
+
+replace github.com/c12s/agent_queue => ../gravity
