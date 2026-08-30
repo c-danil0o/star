@@ -1,6 +1,7 @@
 package bootc
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,8 +28,12 @@ var verifySkipLogged bool
 
 // Verify checks that imageRef@digest is acceptable to stage.
 func Verify(imageRef, digest string) error {
-	if !strings.HasPrefix(digest, "sha256:") || len(digest) != len("sha256:")+64 {
+	const prefix = "sha256:"
+	if !strings.HasPrefix(digest, prefix) || len(digest) != len(prefix)+64 {
 		return fmt.Errorf("malformed digest %q (want sha256:<64 hex>)", digest)
+	}
+	if _, err := hex.DecodeString(digest[len(prefix):]); err != nil {
+		return fmt.Errorf("malformed digest %q (not valid hex)", digest)
 	}
 	return verifySignature(imageRef)
 }
