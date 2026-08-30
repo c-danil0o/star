@@ -3,6 +3,7 @@ package bootc
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 )
 
@@ -12,41 +13,60 @@ type Status struct {
 	Version string
 }
 
+// bootc status --json returns the org.containers.bootc/v1 BootcHost schema.
+// The booted deployment lives at .status.booted.image with the following shape:
+//
+//	"image": {
+//	    "image": {"image": "<ref>", "transport": "registry"},
+//	    "imageDigest": "sha256:...",
+//	    "version": "..."
+//	}
 type bootcStatusOutput struct {
-	Booted *bootcStatusEntry `json:"booted"`
 	Status *struct {
 		Booted *bootcStatusEntry `json:"booted"`
 	} `json:"status"`
 }
 
 type bootcStatusEntry struct {
-	Image *struct {
-		Image  string `json:"image"`
-		Digest string `json:"digest"`
-	} `json:"image"`
-	Version string `json:"version"`
+	Image *bootcImageStatus `json:"image"`
+}
+
+type bootcImageStatus struct {
+	Image       *bootcImageRef `json:"image"`
+	ImageDigest string         `json:"imageDigest"`
+	Version     string         `json:"version"`
+}
+
+type bootcImageRef struct {
+	Image     string `json:"image"`
+	Transport string `json:"transport"`
 }
 
 func ProbeStatus() *Status {
-	out, err := exec.Command("bootc", "status", "--json").Output()
+	out, err := exec.Command("bootc", "status", "--json").CombinedOutput()
 	if err != nil {
+		log.Printf("[bootc] status failed: %s (stderr: %s)", err, string(out))
 		return nil
 	}
 	parsed := &bootcStatusOutput{}
 	if err := json.Unmarshal(out, parsed); err != nil {
+		log.Printf("[bootc] status JSON parse failed: %s", err)
 		return nil
 	}
-	booted := parsed.Booted
-	if booted == nil && parsed.Status != nil {
-		booted = parsed.Status.Booted
-	}
-	if booted == nil {
+	if parsed.Status == nil || parsed.Status.Booted == nil {
+		log.Println("[bootc] status: no booted deployment found")
 		return nil
 	}
-	status := &Status{Version: booted.Version}
-	if booted.Image != nil {
-		status.Image = booted.Image.Image
-		status.Digest = booted.Image.Digest
+	booted := parsed.Status.Booted
+	if booted.Image == nil {
+		return nil
+	}
+	status := &Status{
+		Digest:  booted.Image.ImageDigest,
+		Version: booted.Image.Version,
+	}
+	if booted.Image.Image != nil {
+		status.Image = booted.Image.Image.Image
 	}
 	return status
 }
