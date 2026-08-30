@@ -87,6 +87,16 @@ func (p *Poller) reconcile() {
 	if last != nil && last.Digest == desired.Digest && last.Result == magnetarapi.OsAttemptFailed {
 		_ = p.attempts.Clear()
 	}
+	if err := Verify(desired.ImageRef, desired.Digest); err != nil {
+		_ = p.attempts.Record(Attempt{
+			Image:     desired.ImageRef,
+			Digest:    desired.Digest,
+			Result:    magnetarapi.OsAttemptFailed,
+			Timestamp: time.Now().Unix(),
+		})
+		p.report(magnetarapi.OsPhaseDegraded, "verification failed: "+err.Error())
+		return
+	}
 	p.report(magnetarapi.OsPhaseSwitching, "switching to "+desired.ImageRef+"@"+desired.Digest)
 	err := Switch(desired.ImageRef, desired.Digest)
 	if err != nil {
