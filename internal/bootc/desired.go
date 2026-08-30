@@ -14,18 +14,37 @@ type DesiredImage struct {
 }
 
 type DesiredStore struct {
-	mu      sync.Mutex
+	path string
+	mu   sync.Mutex
 	desired *DesiredImage
 }
 
-func NewDesiredStore() *DesiredStore {
-	return &DesiredStore{}
+// NewDesiredStore loads the desired image persisted in stateDir (if any), so
+// desired state survives the reboot that bootc switch performs and the
+// poller can detect a greenboot rollback after the node comes back.
+func NewDesiredStore(stateDir string) *DesiredStore {
+	s := &DesiredStore{
+		path: filepath.Join(stateDir, "os_desired.json"),
+	}
+	data, err := os.ReadFile(s.path)
+	if err == nil {
+		desired := &DesiredImage{}
+		if err := json.Unmarshal(data, desired); err == nil {
+			s.desired = desired
+		}
+	}
+	return s
 }
 
 func (s *DesiredStore) Set(desired DesiredImage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.desired = &desired
+	if s.path != "" {
+		if data, err := json.Marshal(desired); err == nil {
+			_ = os.WriteFile(s.path, data, 0600)
+		}
+	}
 }
 
 func (s *DesiredStore) Get() *DesiredImage {
@@ -38,6 +57,11 @@ func (s *DesiredStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.desired = nil
+	if s.path != "" {
+		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+			return
+		}
+	}
 }
 
 type Attempt struct {
@@ -65,7 +89,7 @@ func (s *AttemptStore) Record(attempt Attempt) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0644)
+	return os.WriteFile(s.path, data, 0600)
 }
 
 func (s *AttemptStore) Last() *Attempt {

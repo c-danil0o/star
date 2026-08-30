@@ -21,7 +21,7 @@ type Poller struct {
 func NewPoller(interval time.Duration, stateDir string, statusHandler StatusCallback) *Poller {
 	return &Poller{
 		interval:      interval,
-		desired:       NewDesiredStore(),
+		desired:       NewDesiredStore(stateDir),
 		attempts:      NewAttemptStore(stateDir),
 		statusHandler: statusHandler,
 	}
@@ -73,16 +73,31 @@ func (p *Poller) reconcile() {
 	}
 	if status.Digest == desired.Digest {
 		last := p.attempts.Last()
-		if last != nil {
+		if last != nil && last.Digest == desired.Digest && last.Result != magnetarapi.OsAttemptApplied {
 			_ = p.attempts.Clear()
 		}
 		p.report(magnetarapi.OsPhaseHealthy, "booted image matches desired state")
 		return
 	}
 	last := p.attempts.Last()
-	if last != nil && last.Digest == desired.Digest && last.Result == magnetarapi.OsAttemptRolledBack {
-		p.report(magnetarapi.OsPhaseRolledBack, "previous attempt for desired digest was rolled back, waiting for new desired image")
-		return
+	if last != nil && last.Digest == desired.Digest {
+		if last.Result == magnetarapi.OsAttemptRolledBack {
+			p.report(magnetarapi.OsPhaseRolledBack, "previous attempt for desired digest was rolled back, waiting for new desired image")
+			return
+		}
+		if last.Result == magnetarapi.OsAttemptApplied {
+			// The switch was performed and the node rebooted, but it came
+			// back on the old image: the health gate (greenboot) rejected
+			// the new deployment and rolled back. Park instead of looping.
+			_ = p.attempts.Record(Attempt{
+				Image:     desired.ImageRef,
+				Digest:    desired.Digest,
+				Result:    magnetarapi.OsAttemptRolledBack,
+				Timestamp: time.Now().Unix(),
+			})
+			p.report(magnetarapi.OsPhaseRolledBack, "greenboot rolled back the desired digest, waiting for new desired image")
+			return
+		}
 	}
 	if last != nil && last.Digest == desired.Digest && last.Result == magnetarapi.OsAttemptFailed {
 		_ = p.attempts.Clear()
@@ -98,8 +113,7 @@ func (p *Poller) reconcile() {
 		return
 	}
 	p.report(magnetarapi.OsPhaseSwitching, "switching to "+desired.ImageRef+"@"+desired.Digest)
-	err := Switch(desired.ImageRef, desired.Digest)
-	if err != nil {
+	if err := Switch(desired.ImageRef, desired.Digest); err != nil {
 		_ = p.attempts.Record(Attempt{
 			Image:     desired.ImageRef,
 			Digest:    desired.Digest,
@@ -109,12 +123,22 @@ func (p *Poller) reconcile() {
 		p.report(magnetarapi.OsPhaseDegraded, err.Error())
 		return
 	}
+	// record before rebooting (see Switch doc): this is what lets the next
+	// boot tell "we switched and came back on the old image" (rollback)
+	// apart from "we never switched"
 	_ = p.attempts.Record(Attempt{
 		Image:     desired.ImageRef,
 		Digest:    desired.Digest,
 		Result:    magnetarapi.OsAttemptApplied,
 		Timestamp: time.Now().Unix(),
 	})
+	if desired.RebootPolicy != "" && desired.RebootPolicy != "immediate" {
+		p.report(magnetarapi.OsPhaseDegraded, "staged switch, reboot policy "+desired.RebootPolicy+" not supported yet")
+		return
+	}
+	if err := Reboot(); err != nil {
+		p.report(magnetarapi.OsPhaseDegraded, "reboot after switch failed: "+err.Error())
+	}
 }
 
 func StateDir() string {

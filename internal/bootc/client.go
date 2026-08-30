@@ -72,8 +72,11 @@ func ProbeStatus() *Status {
 }
 
 func Switch(imageRef, digest string) error {
+	// stage the deployment without --apply: the caller records the attempt
+	// BEFORE rebooting, so the loop guard knows a switch was performed even
+	// if the reboot kills this process mid-flight
 	ref := fmt.Sprintf("%s@%s", imageRef, digest)
-	out, err := exec.Command("bootc", "switch", "--apply", ref).CombinedOutput()
+	out, err := exec.Command("bootc", "switch", ref).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("bootc switch failed: %s", string(out))
 	}
