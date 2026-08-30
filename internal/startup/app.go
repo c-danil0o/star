@@ -150,11 +150,6 @@ func (a *app) init() {
 	a.grpcServer = s
 }
 
-func (a *app) startBootcPoller(ctx context.Context) {
-	poller := bootc.NewPoller(a.config.OsPollInterval(), bootc.StateDir(), nil)
-	poller.Run(ctx)
-}
-
 func (a *app) startSerfAgent() error {
 	// todo: join on signal
 	// err := a.serfAgent.Join(true)
