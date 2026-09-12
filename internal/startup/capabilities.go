@@ -10,7 +10,14 @@ import (
 	"github.com/c12s/star/internal/bootc"
 )
 
-const libvirtSocketPath = "/var/run/libvirt/libvirt-sock"
+// libvirtSocketPaths covers both daemon layouts: the monolithic libvirtd
+// socket and the modular virtqemud socket (default on modern Fedora and on
+// this lab host). The VM reconciler shells out to virsh/virt-install, which
+// reach either daemon transparently.
+var libvirtSocketPaths = []string{
+	"/var/run/libvirt/libvirt-sock",
+	"/run/libvirt/virtqemud-sock",
+}
 
 func discoverCapabilities() []string {
 	capabilities := []string{magnetarapi.CapabilityConfig, magnetarapi.CapabilityGossip}
@@ -29,8 +36,12 @@ func commandExists(name string) bool {
 }
 
 func libvirtSocketExists() bool {
-	_, err := os.Stat(libvirtSocketPath)
-	return err == nil
+	for _, path := range libvirtSocketPaths {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func syncNodeState(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, capabilities []string, osStatus *magnetarapi.OsStatus) error {

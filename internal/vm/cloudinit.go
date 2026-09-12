@@ -1,0 +1,178 @@
+package vm
+
+import (
+	"fmt"
+	"hash/fnv"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// NoCloud seed generation for VMs created by the reconciler (phase-next.md
+// §2.6.6). Modeled on wormhole's provisioning seed, but the control-plane
+// addresses come from Star's own config: the host already knows them, so the
+// VMs it creates inherit them without any operator input.
+//
+// The seed is produced out of band of the control plane (D1): it writes
+// /var/lib/c12s/node.env inside the guest; the guest's own Star enrolls on
+// first boot exactly like a bare-metal node.
+
+// SeedSpec describes one VM's first-boot configuration.
+type SeedSpec struct {
+	Dir         string // per-VM directory for meta-data/user-data/network-config/seed.iso
+	Domain      string // libvirt domain name (also cloud-init instance-id)
+	MAC         string // deterministic MAC; the NIC is matched by this address
+	Address     string // static IPv4 for the guest
+	Gateway     string // gateway of the VM network
+	NATSAddress string // control-plane NATS address (from the host's config)
+	Extras      map[string]string
+}
+
+// BuildSeed renders the NoCloud seed files and packs them into seed.iso
+// (volume label `cidata`, picked up by cloud-init on first boot).
+func BuildSeed(spec SeedSpec) (string, error) {
+	if spec.Dir == "" || spec.Domain == "" {
+		return "", fmt.Errorf("seed dir and domain are required")
+	}
+	if spec.MAC == "" || spec.Address == "" || spec.Gateway == "" {
+		return "", fmt.Errorf("seed for %s: mac, address and gateway are required", spec.Domain)
+	}
+	if spec.NATSAddress == "" {
+		return "", fmt.Errorf("seed for %s: NATS address is required", spec.Domain)
+	}
+	if err := os.MkdirAll(spec.Dir, 0o700); err != nil {
+		return "", fmt.Errorf("create seed dir: %w", err)
+	}
+
+	metaData := fmt.Sprintf("instance-id: %s\nlocal-hostname: %s\n", spec.Domain, spec.Domain)
+	userData := fmt.Sprintf(`#cloud-config
+users:
+  - name: c12s
+    gecos: c12s debug user
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    sudo: ALL=(ALL) NOPASSWD:ALL
+chpasswd:
+  expire: false
+  users:
+    - name: c12s
+      password: c12s
+      type: text
+ssh_pwauth: true
+write_files:
+  - path: /var/lib/c12s/node.env
+    permissions: '0644'
+    content: |
+%s
+runcmd:
+  - systemctl enable --now serial-getty@ttyS0.service
+`, indent(strings.Join(nodeEnvLines(spec.NATSAddress, spec.Extras), "\n"), "      "))
+
+	networkConfig := fmt.Sprintf(`version: 1
+config:
+  - type: physical
+    name: nic0
+    mac_address: "%s"
+    subnets:
+      - type: static
+        address: %s
+        netmask: 255.255.255.0
+        gateway: %s
+`, spec.MAC, spec.Address, spec.Gateway)
+
+	metaPath := filepath.Join(spec.Dir, "meta-data")
+	userPath := filepath.Join(spec.Dir, "user-data")
+	netPath := filepath.Join(spec.Dir, "network-config")
+	if err := os.WriteFile(metaPath, []byte(metaData), 0o600); err != nil {
+		return "", fmt.Errorf("write meta-data: %w", err)
+	}
+	if err := os.WriteFile(userPath, []byte(userData), 0o600); err != nil {
+		return "", fmt.Errorf("write user-data: %w", err)
+	}
+	if err := os.WriteFile(netPath, []byte(networkConfig), 0o600); err != nil {
+		return "", fmt.Errorf("write network-config: %w", err)
+	}
+
+	seedPath := filepath.Join(spec.Dir, "seed.iso")
+	cmd := exec.Command(
+		"xorriso", "-as", "mkisofs",
+		"-o", seedPath,
+		"-volid", "cidata",
+		"-joliet", "-rock",
+		metaPath, userPath, netPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("build seed iso (xorriso): %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return seedPath, nil
+}
+
+func nodeEnvLines(natsAddress string, extras map[string]string) []string {
+	lines := []string{
+		"NATS_ADDRESS=" + natsAddress,
+		"NODE_ID_DIR_PATH=/var/lib/c12s",
+		"NODE_ID_FILE_NAME=nodeid",
+		"REGISTRATION_REQ_TIMEOUT_MILLISECONDS=10000",
+		"MAX_REGISTRATION_RETRIES=3",
+		"BIND_ADDRESS=0.0.0.0",
+		"BIND_PORT=7946",
+		"STAR_ADDRESS=:11000",
+		"OS_POLL_INTERVAL=30s",
+	}
+	for k, v := range extras {
+		lines = append(lines, k+"="+v)
+	}
+	return lines
+}
+
+// deterministicMAC maps a VM name to a stable locally-administered MAC in the
+// QEMU/KVM OUI (52:54:00). Same scheme as the provisioning helper (DEV-9) so
+// a VM's address is reproducible from its name alone.
+func deterministicMAC(name string) string {
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	b := h.Sum32()
+	return fmt.Sprintf("52:54:00:c1:2e:%02x", b&0xFF)
+}
+
+// staticAddress derives a stable IPv4 from the VM name: trailing digits
+// offset ipBase+offset (node-1 with base 192.168.122 and offset 100 →
+// 192.168.122.101). Names without digits hash into the pool.
+func staticAddress(name, ipBase string, offset int) (string, error) {
+	digits := ""
+	for _, r := range name {
+		if r >= '0' && r <= '9' {
+			digits += string(r)
+		}
+	}
+	if digits == "" {
+		h := fnv.New32a()
+		h.Write([]byte(name))
+		digits = strconv.Itoa(int(h.Sum32()%50) + 1)
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n < 0 || n+offset > 254 {
+		return "", fmt.Errorf("vm name %q: bad node number %q for ip base %s", name, digits, ipBase)
+	}
+	return ipBase + "." + strconv.Itoa(offset+n), nil
+}
+
+func gatewayFromBase(ipBase string) string {
+	if !strings.HasSuffix(ipBase, ".") {
+		ipBase += "."
+	}
+	return ipBase + "1"
+}
+
+func indent(s, prefix string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if l != "" {
+			lines[i] = prefix + l
+		}
+	}
+	return strings.Join(lines, "\n")
+}

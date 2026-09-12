@@ -14,8 +14,8 @@ type DesiredImage struct {
 }
 
 type DesiredStore struct {
-	path string
-	mu   sync.Mutex
+	path    string
+	mu      sync.Mutex
 	desired *DesiredImage
 }
 

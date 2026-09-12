@@ -3,6 +3,7 @@ package bootc
 import (
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -65,7 +66,7 @@ func verifySignature(imageRef string) error {
 func skipVerification(reason string) error {
 	if !verifySkipLogged {
 		verifySkipLogged = true
-		fmt.Printf("os verify: signature check skipped (%s)\n", reason)
+		log.Printf("os verify: signature check skipped (%s)\n", reason)
 	}
 	return nil
 }

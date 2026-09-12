@@ -15,6 +15,7 @@ import (
 	"github.com/c12s/star/internal/servers"
 	"github.com/c12s/star/internal/services"
 	"github.com/c12s/star/internal/store"
+	"github.com/c12s/star/internal/vm"
 	"github.com/c12s/star/pkg/api"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -104,6 +105,34 @@ func (a *app) init() {
 		a.bootcHandler = handler
 
 		go poller.Run(ctx)
+	}
+
+	if slices.Contains(capabilities, magnetarapi.CapabilityRunVms) {
+		log.Println("starting vm reconciler module")
+		ctx, cancel := context.WithCancel(context.Background())
+		a.shutdownProcesses = append(a.shutdownProcesses, cancel)
+
+		reconciler, err := vm.NewReconciler(vm.ReconcilerConfig{
+			HostId:         nodeId.Value,
+			Interval:       a.config.VmPollInterval(),
+			CacheDir:       a.config.VmCacheDir(),
+			StateDir:       a.config.VmStateDir(),
+			IPBase:         a.config.VmIpBase(),
+			IPOffset:       a.config.VmIpOffset(),
+			NATSAddress:    a.config.NatsAddress(),
+			SingularityURL: a.config.SingularityUrl(),
+			ManagerConfig: vm.ManagerConfig{
+				Network:   a.config.VmNetwork(),
+				OSVariant: a.config.VmOsVariant(),
+				// bootc-image-builder images are UEFI-only
+				UEFI: true,
+			},
+		})
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		go reconciler.Run(ctx)
 	}
 
 	configStore, err := store.NewConfigInMemStore()
@@ -210,7 +239,7 @@ func (a *app) GracefulStop() {
 	if a.bootcHandler != nil {
 		a.bootcHandler.GracefulStop()
 	}
-	for _, shudownProcess := range a.shutdownProcesses {
-		shudownProcess()
+	for _, shutdownProcess := range a.shutdownProcesses {
+		shutdownProcess()
 	}
 }
