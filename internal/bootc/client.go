@@ -72,9 +72,16 @@ func ProbeStatus() *Status {
 }
 
 func Switch(imageRef, digest string) error {
-	// stage the deployment without --apply: the caller records the attempt
+	// Stage the deployment without --apply: the caller records the attempt
 	// BEFORE rebooting, so the loop guard knows a switch was performed even
-	// if the reboot kills this process mid-flight
+	// if the reboot kills this process mid-flight.
+	//
+	// Rollback trigger arming is handled by systemd:
+	// greenboot-set-rollback-trigger.service (RequiredBy=ostree-finalize-staged)
+	// fires during the staging shutdown path and sets fallback=1 +
+	// greenboot_next_deployment_id in grubenv. greenboot-rs 0.16 health-check
+	// manages boot_counter entirely in userspace (3 failed checks → bootc
+	// rollback). Verified E2E on Fedora 45 / greenboot-rs 0.16.
 	ref := fmt.Sprintf("%s@%s", imageRef, digest)
 	out, err := exec.Command("bootc", "switch", ref).CombinedOutput()
 	if err != nil {
