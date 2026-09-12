@@ -42,8 +42,13 @@ func BuildSeed(spec SeedSpec) (string, error) {
 	if spec.NATSAddress == "" {
 		return "", fmt.Errorf("seed for %s: NATS address is required", spec.Domain)
 	}
-	if err := os.MkdirAll(spec.Dir, 0o700); err != nil {
+	if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
 		return "", fmt.Errorf("create seed dir: %w", err)
+	}
+	// MkdirAll/WriteFile do not change the mode of pre-existing paths (e.g.
+	// from an earlier failed attempt), and qemu must be able to read the seed
+	if err := os.Chmod(spec.Dir, 0o755); err != nil {
+		return "", fmt.Errorf("chmod seed dir: %w", err)
 	}
 
 	metaData := fmt.Sprintf("instance-id: %s\nlocal-hostname: %s\n", spec.Domain, spec.Domain)
@@ -86,14 +91,19 @@ config:
 	metaPath := filepath.Join(spec.Dir, "meta-data")
 	userPath := filepath.Join(spec.Dir, "user-data")
 	netPath := filepath.Join(spec.Dir, "network-config")
-	if err := os.WriteFile(metaPath, []byte(metaData), 0o600); err != nil {
+	if err := os.WriteFile(metaPath, []byte(metaData), 0o644); err != nil {
 		return "", fmt.Errorf("write meta-data: %w", err)
 	}
-	if err := os.WriteFile(userPath, []byte(userData), 0o600); err != nil {
+	if err := os.WriteFile(userPath, []byte(userData), 0o644); err != nil {
 		return "", fmt.Errorf("write user-data: %w", err)
 	}
-	if err := os.WriteFile(netPath, []byte(networkConfig), 0o600); err != nil {
+	if err := os.WriteFile(netPath, []byte(networkConfig), 0o644); err != nil {
 		return "", fmt.Errorf("write network-config: %w", err)
+	}
+	for _, path := range []string{metaPath, userPath, netPath} {
+		if err := os.Chmod(path, 0o644); err != nil {
+			return "", fmt.Errorf("chmod %s: %w", filepath.Base(path), err)
+		}
 	}
 
 	seedPath := filepath.Join(spec.Dir, "seed.iso")

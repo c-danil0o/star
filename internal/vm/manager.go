@@ -52,8 +52,13 @@ func NewManager(cfg ManagerConfig, stateDir string) (*Manager, error) {
 			return nil, fmt.Errorf("vm manager: %s not found in PATH", bin)
 		}
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create vm state dir: %w", err)
+	}
+	// the qemu user must traverse the state dir to reach VM disks; MkdirAll
+	// does not fix the mode of a pre-existing directory
+	if err := os.Chmod(stateDir, 0o755); err != nil {
+		return nil, fmt.Errorf("chmod vm state dir: %w", err)
 	}
 	return &Manager{cfg: cfg, stateDir: stateDir}, nil
 }
@@ -96,11 +101,14 @@ func (m *Manager) Create(spec CreateSpec) error {
 	}
 
 	dir := m.VMDir(spec.Name)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create vm dir: %w", err)
 	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return fmt.Errorf("chmod vm dir: %w", err)
+	}
 	base := filepath.Join(dir, "base.qcow2")
-	if err := copyReflink(spec.DiskPath, base); err != nil {
+	if err := copyIfNeeded(spec.DiskPath, base); err != nil {
 		return fmt.Errorf("copy base image: %w", err)
 	}
 	disk := filepath.Join(dir, "disk.qcow2")
@@ -215,6 +223,20 @@ func copyReflink(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0o644)
+}
+
+// copyIfNeeded copies src to dst unless dst is a completed copy of the same
+// size — Create is retried every reconcile tick, and re-copying a multi-GB
+// image on a filesystem without reflink would be wasteful.
+func copyIfNeeded(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if dstInfo, err := os.Stat(dst); err == nil && dstInfo.Size() == srcInfo.Size() {
+		return nil
+	}
+	return copyReflink(src, dst)
 }
 
 // createOverlay makes a qcow2 overlay backed by the per-VM copy of the
