@@ -65,10 +65,11 @@ func (s *DesiredStore) Clear() {
 }
 
 type Attempt struct {
-	Image     string `json:"image"`
-	Digest    string `json:"digest"`
-	Result    string `json:"result"`
-	Timestamp int64  `json:"timestamp"`
+	Image          string `json:"image"`
+	Digest         string `json:"digest"`
+	PreviousDigest string `json:"previousDigest,omitempty"`
+	Result         string `json:"result"`
+	Timestamp      int64  `json:"timestamp"`
 }
 
 type AttemptStore struct {

@@ -86,17 +86,26 @@ func (p *Poller) reconcile() {
 			return
 		}
 		if last.Result == magnetarapi.OsAttemptApplied {
-			// The switch was performed and the node rebooted, but it came
-			// back on the old image: the health gate (greenboot) rejected
-			// the new deployment and rolled back. Park instead of looping.
-			_ = p.attempts.Record(Attempt{
-				Image:     desired.ImageRef,
-				Digest:    desired.Digest,
-				Result:    magnetarapi.OsAttemptRolledBack,
-				Timestamp: time.Now().Unix(),
-			})
-			p.report(magnetarapi.OsPhaseRolledBack, "greenboot rolled back the desired digest, waiting for new desired image")
-			return
+			if last.PreviousDigest == "" || status.Digest == last.PreviousDigest {
+				// The switch was performed and the node rebooted, but it
+				// came back on the pre-switch image: the health gate
+				// (greenboot) rejected the new deployment and rolled back.
+				// Park instead of looping.
+				_ = p.attempts.Record(Attempt{
+					Image:          desired.ImageRef,
+					Digest:         desired.Digest,
+					PreviousDigest: last.PreviousDigest,
+					Result:         magnetarapi.OsAttemptRolledBack,
+					Timestamp:      time.Now().Unix(),
+				})
+				p.report(magnetarapi.OsPhaseRolledBack, "greenboot rolled back the desired digest, waiting for new desired image")
+				return
+			}
+			// The node came back on some *other* image: an out-of-band
+			// change (manual bootc switch), not a greenboot rollback. The
+			// declared state wins — fall through and switch back.
+			p.report(magnetarapi.OsPhaseDegraded, "drift detected: booted "+status.Digest+", reconciling to desired image")
+			_ = p.attempts.Clear()
 		}
 	}
 	if last != nil && last.Digest == desired.Digest && last.Result == magnetarapi.OsAttemptFailed {
@@ -125,12 +134,13 @@ func (p *Poller) reconcile() {
 	}
 	// record before rebooting (see Switch doc): this is what lets the next
 	// boot tell "we switched and came back on the old image" (rollback)
-	// apart from "we never switched"
+	// apart from "we never switched" (and from drift to a third image)
 	_ = p.attempts.Record(Attempt{
-		Image:     desired.ImageRef,
-		Digest:    desired.Digest,
-		Result:    magnetarapi.OsAttemptApplied,
-		Timestamp: time.Now().Unix(),
+		Image:          desired.ImageRef,
+		Digest:         desired.Digest,
+		PreviousDigest: status.Digest,
+		Result:         magnetarapi.OsAttemptApplied,
+		Timestamp:      time.Now().Unix(),
 	})
 	if desired.RebootPolicy != "" && desired.RebootPolicy != "immediate" {
 		p.report(magnetarapi.OsPhaseDegraded, "staged switch, reboot policy "+desired.RebootPolicy+" not supported yet")
