@@ -130,7 +130,6 @@ func (p *Poller) reconcile() {
 		return
 	}
 	p.report(magnetarapi.OsPhaseSwitching, "switching to "+desired.ImageRef+"@"+desired.Digest)
-	RepairStaleBootState()
 	if err := Switch(desired.ImageRef, desired.Digest); err != nil {
 		_ = p.attempts.Record(Attempt{
 			Image:     desired.ImageRef,
@@ -167,13 +166,29 @@ func (p *Poller) reconcile() {
 // passed greenboot's gate reports healthy, while a deployment whose gate has
 // not run yet (or has failed) stays in switching until greenboot accepts it
 // or rolls it back.
+//
+// The gate fires on every switch-reboot when greenboot is present: we wait
+// until greenboot-healthcheck.service has finished AND boot_success=1. We
+// cannot trust boot_success alone because greenboot-set-rollback-trigger may
+// not reset it to 0 during the staging shutdown, leaving a stale "1" from the
+// previous good boot that would let a broken image slip through.
 func (p *Poller) reconcileBooted(desired *DesiredImage, last *Attempt, bootID string) {
 	if last != nil && last.Digest == desired.Digest {
 		if last.Result == magnetarapi.OsAttemptApplied {
 			rebooted := last.BootID == "" || bootID != last.BootID
 			if rebooted && GreenbootPresent() {
-				if value, ok := GrubEnvValue("boot_success"); ok && value != "1" {
-					p.report(magnetarapi.OsPhaseSwitching, "booted desired image, waiting for greenboot health gate")
+				// Wait until greenboot-healthcheck.service has completed
+				// its run on this boot. While it is still "activating",
+				// report switching — regardless of what boot_success says
+				// (it may be stale from the previous deployment).
+				if !GreenbootHealthcheckDone() {
+					p.report(magnetarapi.OsPhaseSwitching, "booted desired image, waiting for greenboot health check to finish")
+					return
+				}
+				// Healthcheck finished. Check the verdict: boot_success=1
+				// means greenboot accepted this deployment.
+				if value, ok := GrubEnvValue("boot_success"); !ok || value != "1" {
+					p.report(magnetarapi.OsPhaseSwitching, "booted desired image, greenboot health check did not pass")
 					return
 				}
 			}
