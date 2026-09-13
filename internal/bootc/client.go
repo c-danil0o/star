@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"strings"
 )
+
+const grubEnvPath = "/boot/grub2/grubenv"
 
 type Status struct {
 	Image   string
@@ -96,6 +100,69 @@ func Rollback() error {
 		return fmt.Errorf("bootc rollback failed: %s", string(out))
 	}
 	return Reboot()
+}
+
+// CurrentBootID returns the kernel boot id, which changes on every boot.
+// Empty string means "unknown" (callers treat that as "assume rebooted").
+func CurrentBootID() string {
+	data, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// GreenbootPresent reports whether greenboot's health gate is installed. The
+// binary is not in PATH (/usr/libexec/greenboot/greenboot).
+func GreenbootPresent() bool {
+	_, err := os.Stat("/usr/libexec/greenboot/greenboot")
+	return err == nil
+}
+
+// GrubEnvValue reads a single key from the GRUB environment block.
+func GrubEnvValue(key string) (string, bool) {
+	data, err := os.ReadFile(grubEnvPath)
+	if err != nil {
+		return "", false
+	}
+	prefix := key + "="
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimRight(line, "\x00")
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix), true
+		}
+	}
+	return "", false
+}
+
+// RepairStaleBootState clears an exhausted greenboot boot counter left over
+// from a deployment whose rollback dead-ended (greenboot "manual intervention
+// required": boot_counter=0/-1, no rollback trigger). The legacy GRUB snippet
+// 08_greenboot.cfg uses a non-empty boot_counter with boot_success=0 to force
+// default=1; after re-staging an image the second entry can be the failed
+// deployment itself, so the node boots the broken image again no matter which
+// image was just staged. Clearing the counter before a switch restores the
+// normal boot entry. Best effort: on nodes without greenboot/grubenv this is
+// a no-op.
+func RepairStaleBootState() {
+	value, ok := GrubEnvValue("boot_counter")
+	if !ok || (value != "0" && value != "-1") {
+		return
+	}
+	out, err := exec.Command("grub2-editenv", "-", "unset", "boot_counter").CombinedOutput()
+	if err != nil {
+		// /boot is frequently mounted read-only outside greenboot's write
+		// window (and greenboot is not around to remount it now).
+		if _, mErr := exec.Command("mount", "-o", "remount,rw", "/boot").CombinedOutput(); mErr != nil {
+			log.Printf("[bootc] failed to clear stale boot_counter=%s: %s (%s)", value, err, string(out))
+			return
+		}
+		if retryOut, retryErr := exec.Command("grub2-editenv", "-", "unset", "boot_counter").CombinedOutput(); retryErr != nil {
+			log.Printf("[bootc] failed to clear stale boot_counter=%s: %s (%s)", value, retryErr, string(retryOut))
+			return
+		}
+	}
+	log.Printf("[bootc] cleared stale greenboot boot_counter=%s before switching", value)
 }
 
 func Reboot() error {

@@ -97,7 +97,7 @@ func (a *app) init() {
 		poller := bootc.NewPoller(a.config.OsPollInterval(), bootc.StateDir(), nil)
 		reporter := bootc.NewReporter(nodeUpdateClient, nodeId.Value, poller.Attempts())
 		poller.SetStatusHandler(reporter.Report)
-		handler := bootc.NewHandler(natsConn, nodeId.Value, poller.Desired())
+		handler := bootc.NewHandler(natsConn, nodeId.Value, poller.Desired(), poller.Attempts())
 		err = handler.Serve()
 		if err != nil {
 			log.Fatalln(err)

@@ -70,6 +70,11 @@ type Attempt struct {
 	PreviousDigest string `json:"previousDigest,omitempty"`
 	Result         string `json:"result"`
 	Timestamp      int64  `json:"timestamp"`
+	// BootID is the kernel boot id at the time the switch was staged. After
+	// a reboot it no longer matches, which is what lets the poller tell
+	// "deployment staged, reboot still pending" apart from "we rebooted and
+	// came back on another image" (greenboot rollback / drift).
+	BootID string `json:"bootId,omitempty"`
 }
 
 type AttemptStore struct {
