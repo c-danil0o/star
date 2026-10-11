@@ -168,10 +168,10 @@ func (p *Poller) reconcile() {
 // or rolls it back.
 //
 // The gate fires on every switch-reboot when greenboot is present: we wait
-// until greenboot-healthcheck.service has finished AND boot_success=1. We
-// cannot trust boot_success alone because greenboot-set-rollback-trigger may
-// not reset it to 0 during the staging shutdown, leaving a stale "1" from the
-// previous good boot that would let a broken image slip through.
+// until greenboot-healthcheck.service has run on this boot AND boot_success=1.
+// boot_success alone is not enough: it is reset to 0 by greenboot's GRUB
+// snippet at boot and set to 1 only when the checks pass, so before the
+// check has run it can still hold the previous boot's "1".
 func (p *Poller) reconcileBooted(desired *DesiredImage, last *Attempt, bootID string) {
 	if last != nil && last.Digest == desired.Digest {
 		if last.Result == magnetarapi.OsAttemptApplied {
