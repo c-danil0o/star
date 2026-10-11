@@ -88,7 +88,14 @@ func (a *app) init() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	if !syncNodeState(nodeUpdateClient, nodeId.Value, capabilities, osStatus) {
+	// With the bootc module running, its poller reports the OS phase; the
+	// booted digest alone says nothing about greenboot's verdict, so a
+	// "healthy" here would be premature right after a switch-reboot.
+	syncStatus := osStatus
+	if slices.Contains(capabilities, magnetarapi.CapabilityOsUpdate) {
+		syncStatus = nil
+	}
+	if !syncNodeState(nodeUpdateClient, nodeId.Value, capabilities, syncStatus) {
 		log.Println("node not found in Magnetar, re-registering")
 		if err := nodeIdStore.Delete(); err != nil {
 			log.Fatalln(err)
@@ -120,6 +127,11 @@ func (a *app) init() {
 			})
 		})
 		poller.SetStatusHandler(reporter.Report)
+		osClient, err := magnetarapi.NewOsAsyncClient(a.config.NatsAddress())
+		if err != nil {
+			log.Fatalln(err)
+		}
+		poller.SetDesiredSource(osClient, nodeId.Value)
 		handler := bootc.NewHandler(natsConn, nodeId.Value, poller.Desired(), poller.Attempts())
 		err = handler.Serve()
 		if err != nil {

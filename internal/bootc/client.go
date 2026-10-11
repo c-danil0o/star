@@ -15,6 +15,9 @@ type Status struct {
 	Image   string
 	Digest  string
 	Version string
+	// RollbackDigest is the other deployment on disk (empty if none). After
+	// a greenboot rollback it holds the rejected image.
+	RollbackDigest string
 }
 
 // bootc status --json returns the org.containers.bootc/v1 BootcHost schema.
@@ -27,7 +30,8 @@ type Status struct {
 //	}
 type bootcStatusOutput struct {
 	Status *struct {
-		Booted *bootcStatusEntry `json:"booted"`
+		Booted   *bootcStatusEntry `json:"booted"`
+		Rollback *bootcStatusEntry `json:"rollback"`
 	} `json:"status"`
 }
 
@@ -71,6 +75,9 @@ func ProbeStatus() *Status {
 	}
 	if booted.Image.Image != nil {
 		status.Image = booted.Image.Image.Image
+	}
+	if rollback := parsed.Status.Rollback; rollback != nil && rollback.Image != nil {
+		status.RollbackDigest = rollback.Image.ImageDigest
 	}
 	return status
 }

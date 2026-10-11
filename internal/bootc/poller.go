@@ -16,6 +16,8 @@ type Poller struct {
 	desired       *DesiredStore
 	attempts      *AttemptStore
 	statusHandler StatusCallback
+	source        DesiredSource
+	nodeId        string
 }
 
 func NewPoller(interval time.Duration, stateDir string, statusHandler StatusCallback) *Poller {
@@ -62,6 +64,7 @@ func (p *Poller) Run(ctx context.Context) {
 }
 
 func (p *Poller) reconcile() {
+	p.pullDesired()
 	desired := p.desired.Get()
 	if desired == nil {
 		return
@@ -73,6 +76,7 @@ func (p *Poller) reconcile() {
 	}
 	bootID := CurrentBootID()
 	last := p.attempts.Last()
+	restaged := false
 
 	if status.Digest == desired.Digest {
 		p.reconcileBooted(desired, last, bootID)
@@ -90,11 +94,17 @@ func (p *Poller) reconcile() {
 				p.report(magnetarapi.OsPhaseSwitching, "deployment staged, waiting for reboot")
 				return
 			}
-			if last.PreviousDigest == "" || status.Digest == last.PreviousDigest {
+			returned := returnedFrom(status, last, desired)
+			switch returned {
+			case returnRolledBack, returnLostTwice:
 				// The switch was performed and the node rebooted, but it
 				// came back on the pre-switch image: the health gate
 				// (greenboot) rejected the new deployment and rolled back.
 				// Park instead of looping.
+				message := "greenboot rolled back the desired digest, waiting for new desired image"
+				if returned == returnLostTwice {
+					message = "staged deployment was lost twice before it was finalized, waiting for new desired image"
+				}
 				_ = p.attempts.Record(Attempt{
 					Image:          desired.ImageRef,
 					Digest:         desired.Digest,
@@ -103,14 +113,22 @@ func (p *Poller) reconcile() {
 					Timestamp:      time.Now().Unix(),
 					BootID:         last.BootID,
 				})
-				p.report(magnetarapi.OsPhaseRolledBack, "greenboot rolled back the desired digest, waiting for new desired image")
+				p.report(magnetarapi.OsPhaseRolledBack, message)
 				return
+			case returnLostStaging:
+				// The shutdown was cut short before ostree finalized the
+				// staged deployment (e.g. the VM's host rebooted at the same
+				// time): the new image was never booted, nothing to park.
+				p.report(magnetarapi.OsPhaseDegraded, "staged deployment was lost before it was finalized, switching again")
+				restaged = true
+				_ = p.attempts.Clear()
+			case returnDrift:
+				// The node came back on some *other* image: an out-of-band
+				// change (manual bootc switch), not a greenboot rollback.
+				// The declared state wins — fall through and switch back.
+				p.report(magnetarapi.OsPhaseDegraded, "drift detected: booted "+status.Digest+", reconciling to desired image")
+				_ = p.attempts.Clear()
 			}
-			// The node came back on some *other* image: an out-of-band
-			// change (manual bootc switch), not a greenboot rollback. The
-			// declared state wins — fall through and switch back.
-			p.report(magnetarapi.OsPhaseDegraded, "drift detected: booted "+status.Digest+", reconciling to desired image")
-			_ = p.attempts.Clear()
 		case magnetarapi.OsAttemptRolledBack:
 			p.report(magnetarapi.OsPhaseRolledBack, "previous attempt for desired digest was rolled back, waiting for new desired image")
 			return
@@ -151,6 +169,7 @@ func (p *Poller) reconcile() {
 		Result:         magnetarapi.OsAttemptApplied,
 		Timestamp:      time.Now().Unix(),
 		BootID:         bootID,
+		Restaged:       restaged,
 	})
 	if desired.RebootPolicy != "" && desired.RebootPolicy != "immediate" {
 		p.report(magnetarapi.OsPhaseDegraded, "staged switch, reboot policy "+desired.RebootPolicy+" not supported yet")
@@ -204,4 +223,31 @@ func StateDir() string {
 		dir = "/var/lib/c12s"
 	}
 	return dir
+}
+
+type returnKind int
+
+const (
+	returnRolledBack  returnKind = iota // greenboot rejected the new image
+	returnLostStaging                   // staged deployment never reached disk
+	returnLostTwice                     // ... again, after one re-switch
+	returnDrift                         // some third image: out-of-band change
+)
+
+// returnedFrom classifies a boot after an applied switch that did not land on
+// the desired digest. Back on the pre-switch image means either greenboot
+// rolled back — then the rejected image is still on disk as the rollback
+// deployment — or the staging shutdown was cut short before ostree finalized
+// the deployment, and the new image was never booted.
+func returnedFrom(status *Status, last *Attempt, desired *DesiredImage) returnKind {
+	if last.PreviousDigest != "" && status.Digest != last.PreviousDigest {
+		return returnDrift
+	}
+	if status.RollbackDigest == desired.Digest {
+		return returnRolledBack
+	}
+	if last.Restaged {
+		return returnLostTwice
+	}
+	return returnLostStaging
 }

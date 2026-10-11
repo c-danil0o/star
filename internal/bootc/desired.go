@@ -75,6 +75,9 @@ type Attempt struct {
 	// "deployment staged, reboot still pending" apart from "we rebooted and
 	// came back on another image" (greenboot rollback / drift).
 	BootID string `json:"bootId,omitempty"`
+	// Restaged marks a second switch after the first staged deployment was
+	// lost before it reached disk; a second loss parks the digest.
+	Restaged bool `json:"restaged,omitempty"`
 }
 
 type AttemptStore struct {
