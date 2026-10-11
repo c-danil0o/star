@@ -1,6 +1,7 @@
 package startup
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/exec"
@@ -44,33 +45,23 @@ func libvirtSocketExists() bool {
 	return false
 }
 
-type syncResult struct {
-	found bool
-	err   error
-}
-
-func syncNodeState(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, capabilities []string, osStatus *magnetarapi.OsStatus) (bool, error) {
-	ch := make(chan syncResult, 1)
-	req := &magnetarapi.NodeUpdateReq{
+// syncNodeState reports capabilities and OS status, and tells whether
+// Magnetar still knows the node. Only an explicit notFound answer counts as
+// unknown: no answer (CP down, storage error) proves nothing, and
+// re-registering then would orphan the node's org, policies and VMs.
+func syncNodeState(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, capabilities []string, osStatus *magnetarapi.OsStatus) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := client.Update(ctx, &magnetarapi.NodeUpdateReq{
 		NodeId:       nodeId,
 		Capabilities: capabilities,
 		OsStatus:     osStatus,
-	}
-	err := client.Update(req, func(resp *magnetarapi.NodeUpdateResp) {
-		ch <- syncResult{found: !resp.GetNotFound(), err: nil}
 	})
 	if err != nil {
-		return false, err
+		log.Printf("node state sync failed (%v), keeping node id", err)
+		return true
 	}
-	select {
-	case res := <-ch:
-		return res.found, res.err
-	case <-time.After(30 * time.Second):
-		// no answer (CP down or storage error) proves nothing: keep the node
-		// id, re-registering would orphan the node's org, policies and VMs
-		log.Println("node state sync timed out, keeping node id")
-		return true, nil
-	}
+	return !resp.GetNotFound()
 }
 
 func buildOsStatus() *magnetarapi.OsStatus {

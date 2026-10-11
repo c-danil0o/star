@@ -201,40 +201,23 @@ func (r *Reconciler) status(name string) *magnetarapi.VmStatus {
 	return &magnetarapi.VmStatus{Name: name, State: state}
 }
 
+// getDesired fails on no answer (timeout, no responders): the caller then
+// skips the tick, so a control-plane outage never reads as "no VMs".
 func (r *Reconciler) getDesired() ([]*magnetarapi.DesiredVm, error) {
-	respCh := make(chan *magnetarapi.VmDesiredGetResp, 1)
-	if err := r.client.GetDesiredVms(r.hostId, func(resp *magnetarapi.VmDesiredGetResp) {
-		select {
-		case respCh <- resp:
-		default:
-		}
-	}); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), desiredTimeout)
+	defer cancel()
+	resp, err := r.client.GetDesiredVms(ctx, r.hostId)
+	if err != nil {
 		return nil, err
 	}
-	select {
-	case resp := <-respCh:
-		return resp.Vms, nil
-	case <-time.After(desiredTimeout):
-		return nil, errors.New("timed out waiting for desired VMs")
-	}
+	return resp.Vms, nil
 }
 
 func (r *Reconciler) reportStatuses(statuses []*magnetarapi.VmStatus) error {
-	acked := make(chan struct{}, 1)
-	if err := r.client.SetVmStatuses(r.hostId, statuses, func(resp *magnetarapi.VmStatusSetResp) {
-		select {
-		case acked <- struct{}{}:
-		default:
-		}
-	}); err != nil {
-		return err
-	}
-	select {
-	case <-acked:
-		return nil
-	case <-time.After(desiredTimeout):
-		return errors.New("timed out reporting VM statuses")
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), desiredTimeout)
+	defer cancel()
+	_, err := r.client.SetVmStatuses(ctx, r.hostId, statuses)
+	return err
 }
 
 // seedExtras are env vars passed into every VM's /var/lib/c12s/node.env.

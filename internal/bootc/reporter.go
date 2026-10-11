@@ -1,6 +1,7 @@
 package bootc
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -49,21 +50,15 @@ func (r *Reporter) Report(phase string, message string) {
 		NodeId:   r.nodeId,
 		OsStatus: osStatus,
 	}
-	done := make(chan struct{})
-	err := r.client.Update(req, func(resp *magnetarapi.NodeUpdateResp) {
-		if resp.GetNotFound() && r.onUnknown != nil {
-			r.onUnknown()
-		}
-		close(done)
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), reportTimeout)
+	defer cancel()
+	resp, err := r.client.Update(ctx, req)
 	if err != nil {
-		log.Printf("[reporter] update send failed: %s", err)
+		log.Printf("[reporter] reporting phase=%s failed: %s", phase, err)
 		return
 	}
-	select {
-	case <-done:
-	case <-time.After(reportTimeout):
-		log.Println("[reporter] update reply timed out")
+	if resp.GetNotFound() && r.onUnknown != nil {
+		r.onUnknown()
 	}
 	log.Printf("[reporter] reported phase=%s (%s)", phase, message)
 }

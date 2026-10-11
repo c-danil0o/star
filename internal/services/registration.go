@@ -1,10 +1,12 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	magnetarapi "github.com/c12s/magnetar/pkg/api"
 	"github.com/c12s/star/internal/domain"
@@ -22,31 +24,30 @@ func NewRegistrationService(client *magnetarapi.RegistrationAsyncClient, nodeIdR
 	}
 }
 
-func (rs *RegistrationService) Register(maxRetries int8, bindAddress string, capabilities []string, osStatus *magnetarapi.OsStatus) error {
+func (rs *RegistrationService) Register(maxRetries int8, timeout time.Duration, bindAddress string, capabilities []string, osStatus *magnetarapi.OsStatus) error {
 	err := rs.nodeIdRepo.PutClusterId("")
 	if err != nil {
 		log.Fatal(err)
 	}
 	req := rs.buildReq(bindAddress, capabilities, osStatus)
 	for attemptsLeft := maxRetries; attemptsLeft > 0; attemptsLeft-- {
-		errChan := make(chan error)
-		err := rs.tryRegister(req, errChan)
+		err := rs.tryRegister(req, timeout)
 		if err == nil {
-			err = <-errChan
-			if err == nil {
-				return nil
-			}
+			return nil
 		}
 		log.Println(err)
 	}
 	return errors.New("max registration attempts exceeded")
 }
 
-func (rs *RegistrationService) tryRegister(req *magnetarapi.RegistrationReq, errChan chan<- error) error {
-	err := rs.client.Register(req, func(resp *magnetarapi.RegistrationResp) {
-		errChan <- rs.nodeIdRepo.Put(domain.NodeId{Value: resp.NodeId})
-	})
-	return err
+func (rs *RegistrationService) tryRegister(req *magnetarapi.RegistrationReq, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	resp, err := rs.client.Register(ctx, req)
+	if err != nil {
+		return err
+	}
+	return rs.nodeIdRepo.Put(domain.NodeId{Value: resp.NodeId})
 }
 
 func (rs *RegistrationService) buildReq(bindAddress string, capabilities []string, osStatus *magnetarapi.OsStatus) *magnetarapi.RegistrationReq {
