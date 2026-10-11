@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,8 +28,14 @@ type Qcow2Cache struct {
 func NewQcow2Cache(cacheDir string) *Qcow2Cache {
 	return &Qcow2Cache{
 		cacheDir: cacheDir,
-		// large downloads: no global timeout, the body streams under TCP
-		client: &http.Client{},
+		// large downloads: no overall timeout (the body streams for minutes),
+		// but a server that stops answering must not block the reconciler
+		client: &http.Client{Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       60 * time.Second,
+		}},
 	}
 }
 
