@@ -5,7 +5,10 @@ import (
 	"errors"
 	"log"
 	"net"
+	"os"
 	"slices"
+	"sync"
+	"syscall"
 
 	kuiperapi "github.com/c12s/kuiper/pkg/api"
 	magnetarapi "github.com/c12s/magnetar/pkg/api"
@@ -84,9 +87,24 @@ func (a *app) init() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	err = syncNodeState(nodeUpdateClient, nodeId.Value, capabilities, osStatus)
+	found, err := syncNodeState(nodeUpdateClient, nodeId.Value, capabilities, osStatus)
 	if err != nil {
 		log.Fatalln(err)
+	}
+	if !found {
+		log.Println("node not found in Magnetar, re-registering")
+		if err := nodeIdStore.Delete(); err != nil {
+			log.Fatalln(err)
+		}
+		err = registrationService.Register(a.config.MaxRegistrationRetries(), a.config.SerfBindAddress(), capabilities, osStatus)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		nodeId, err = nodeIdStore.Get()
+		if err != nil {
+			log.Fatalln(err)
+		}
+		log.Println("re-registered with NODE ID: " + nodeId.Value)
 	}
 
 	if slices.Contains(capabilities, magnetarapi.CapabilityOsUpdate) {
@@ -96,6 +114,14 @@ func (a *app) init() {
 
 		poller := bootc.NewPoller(a.config.OsPollInterval(), bootc.StateDir(), nil)
 		reporter := bootc.NewReporter(nodeUpdateClient, nodeId.Value, poller.Attempts())
+		var restartOnce sync.Once
+		reporter.SetUnknownNodeHandler(func() {
+			restartOnce.Do(func() {
+				// re-registration happens at startup; the service manager restarts us
+				log.Println("node unknown to Magnetar, restarting to re-register")
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+			})
+		})
 		poller.SetStatusHandler(reporter.Report)
 		handler := bootc.NewHandler(natsConn, nodeId.Value, poller.Desired(), poller.Attempts())
 		err = handler.Serve()

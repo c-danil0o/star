@@ -43,6 +43,10 @@ func (n nodeIdFSStore) Put(nodeId domain.NodeId) error {
 	return os.WriteFile(n.filePath, []byte(nodeId.Value), 0666)
 }
 
+func (n nodeIdFSStore) Delete() error {
+	return os.Remove(n.filePath)
+}
+
 func (n nodeIdFSStore) PutClusterId(clusterId string) error {
 	return os.WriteFile(n.clusterFilePath, []byte(clusterId), 0666)
 }

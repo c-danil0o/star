@@ -10,9 +10,10 @@ import (
 const reportTimeout = 30 * time.Second
 
 type Reporter struct {
-	client   *magnetarapi.NodeUpdateAsyncClient
-	nodeId   string
-	attempts *AttemptStore
+	client    *magnetarapi.NodeUpdateAsyncClient
+	nodeId    string
+	attempts  *AttemptStore
+	onUnknown func()
 }
 
 func NewReporter(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, attempts *AttemptStore) *Reporter {
@@ -21,6 +22,12 @@ func NewReporter(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, attem
 		nodeId:   nodeId,
 		attempts: attempts,
 	}
+}
+
+// SetUnknownNodeHandler is called when Magnetar answers that it has no record
+// of this node (e.g. the control plane was reset while the node kept running).
+func (r *Reporter) SetUnknownNodeHandler(handler func()) {
+	r.onUnknown = handler
 }
 
 func (r *Reporter) Report(phase string, message string) {
@@ -44,6 +51,9 @@ func (r *Reporter) Report(phase string, message string) {
 	}
 	done := make(chan struct{})
 	err := r.client.Update(req, func(resp *magnetarapi.NodeUpdateResp) {
+		if resp.GetNotFound() && r.onUnknown != nil {
+			r.onUnknown()
+		}
 		close(done)
 	})
 	if err != nil {

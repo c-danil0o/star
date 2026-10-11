@@ -44,25 +44,32 @@ func libvirtSocketExists() bool {
 	return false
 }
 
-func syncNodeState(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, capabilities []string, osStatus *magnetarapi.OsStatus) error {
-	errChan := make(chan error)
+type syncResult struct {
+	found bool
+	err   error
+}
+
+func syncNodeState(client *magnetarapi.NodeUpdateAsyncClient, nodeId string, capabilities []string, osStatus *magnetarapi.OsStatus) (bool, error) {
+	ch := make(chan syncResult, 1)
 	req := &magnetarapi.NodeUpdateReq{
 		NodeId:       nodeId,
 		Capabilities: capabilities,
 		OsStatus:     osStatus,
 	}
 	err := client.Update(req, func(resp *magnetarapi.NodeUpdateResp) {
-		errChan <- nil
+		ch <- syncResult{found: !resp.GetNotFound(), err: nil}
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	select {
-	case err = <-errChan:
-		return err
+	case res := <-ch:
+		return res.found, res.err
 	case <-time.After(30 * time.Second):
-		log.Println("node state sync timed out")
-		return nil
+		// no answer (CP down or storage error) proves nothing: keep the node
+		// id, re-registering would orphan the node's org, policies and VMs
+		log.Println("node state sync timed out, keeping node id")
+		return true, nil
 	}
 }
 
