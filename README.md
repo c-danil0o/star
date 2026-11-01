@@ -1,0 +1,208 @@
+# star — c12s node agent
+
+Single Go binary that runs on every c12s node (bare-metal machine, bootc VM,
+or nested VM). It enrolls the node with the control plane, discovers the
+node's capabilities from its environment, and runs exactly the modules those
+capabilities imply — OS updates via bootc, VM reconciliation via libvirt —
+while serving the existing configuration chain.
+
+## Role in c12s
+
+Star is the node end of every pipeline:
+
+| Pipeline | Flow |
+|---|---|
+| Configuration | Kuiper (config) / Meridian (app config) → NATS → **star** → Serf gossip → local gRPC store |
+| OS updates | `cockpit image update` → gateway → gravity → Magnetar (recorded intent) + NATS push → **star** bootc module → `bootc switch` → reboot → greenboot verdict |
+| VM fleet | `cockpit vms set` → gateway → Magnetar (desired VMs) → **star** VM reconciler → libvirt VMs that themselves enroll as c12s nodes |
+
+Everything is capability-driven: there are no node "modes". The same binary
+on a plain machine runs only the config chain; on a bootc machine it adds the
+OS module; on a libvirt host it adds the VM reconciler.
+
+## Capabilities
+
+Discovered at startup (`internal/startup/capabilities.go`), reported at
+registration and on every status sync:
+
+| Capability | Condition | What it starts |
+|---|---|---|
+| `config` | always | Kuiper/Meridian async clients, Serf, gRPC config server |
+| `gossip` | always | Serf agent + cluster-join listener |
+| `os_update` | `bootc` in PATH | bootc module (poller + `os_update` handler + reporter) |
+| `run_vms` | libvirt socket exists (`libvirtd` or `virtqemud`) | VM reconciler |
+
+## Lifecycle
+
+1. Connect to NATS (retries forever; reconnect is unlimited).
+2. Read node id from `$NODE_ID_DIR_PATH/$NODE_ID_FILE_NAME`
+   (default `/var/lib/c12s/nodeid` — in `/var` so it survives every bootc
+   update and rollback).
+3. If absent, register over NATS (`magnetar.registration`); store the UUID.
+4. Sync capabilities and OS status (`magnetar.node.update`). Only an explicit
+   `notFound` reply means Magnetar forgot the node — star then re-registers.
+   A timeout/outage keeps the id (re-registering would orphan the node's org,
+   policies and VMs).
+5. Start capability modules, config servers, Serf listener.
+6. `SIGTERM`/`SIGINT` → graceful stop.
+
+At startup the OS status sync is deliberately *skipped* when the bootc module
+runs: the booted digest alone says nothing about greenboot's verdict, so the
+poller reports the real phase instead of a premature `healthy`.
+
+## Modules
+
+### bootc (`internal/bootc`, capability `os_update`)
+
+- **Desired state (pull).** Every `OS_POLL_INTERVAL` (default 30 s) the
+  poller asks Magnetar for the desired image (`magnetar.os.desired.get`).
+  The control plane's answer wins; no answer → keep converging on the local
+  copy. The NATS push is only the fast path → offline nodes converge when
+  they return.
+- **Switch flow.** `bootc switch <ref>@<digest>` (verify first when cosign
+  material is present), record the attempt `applied` **before** rebooting,
+  reboot, wait for greenboot's health verdict, then report
+  `switching` → `healthy` or `rolled_back`.
+- **Park rule.** A digest greenboot rejected is parked (`rolled_back`) and
+  never retried automatically; a new declaration (or pulled change) lifts it.
+- **Drift.** Out-of-band OS changes are detected on the next tick and
+  reconciled back to the desired image.
+- **Handler.** NATS subject `<node-id>.os_update` (fast path, from gravity)
+  accepts an image update or `rollback` — rollback clears the intent and runs
+  `bootc rollback`.
+- **State files** (mode 0600): `/var/lib/c12s/os_desired.json`,
+  `/var/lib/c12s/os_attempt.json`.
+- **Reports** to Magnetar via `magnetar.node.update`:
+  `{healthy, switching, degraded, rolled_back}`.
+
+### VM reconciler (`internal/vm`, capability `run_vms`)
+
+- Polls `magnetar.vms.desired.get` every `VM_POLL_INTERVAL`; diffs against
+  the libvirt domain list.
+- Missing VM: download qcow2 from `SINGULARITY_URL` into `VM_CACHE_DIR`
+  (sha256-verified, atomic rename of temp download), generate a NoCloud seed
+  (`cloud-init` user-data + network-config, deterministic MAC/IP), then
+  `virt-install --import` (UEFI — bootc-image-builder images are UEFI-only).
+- Crashed VM: `virsh start`. No longer desired: `virsh destroy` + `undefine`.
+- Reports observed state with `magnetar.vms.status.set`.
+- VMs boot into their own Star, enroll as first-class nodes, and get their
+  own bootc module.
+- **State:** `$VM_CACHE_DIR/<digest>/disk.qcow2` (base images, shared),
+  `$VM_STATE_DIR/<name>/` (per-VM overlay + seed).
+
+### Configuration chain
+
+- `ConfigAsyncServer`: receives Kuiper standalone/group configs, stores them,
+  and gossips when the delivery strategy is `gossip`.
+- `AppConfigAsyncServer`: Meridian app-config listener (currently logs; no
+  apply path).
+- Local gRPC `StarConfig` (`pkg/api/proto/star.proto`, reflection enabled):
+  `GetStandaloneConfig`, `GetConfigGroup`.
+
+## API surface
+
+NATS subjects star uses (request/reply unless noted):
+
+| Subject | Direction | Purpose |
+|---|---|---|
+| `magnetar.registration` | star → Magnetar | enroll a new node |
+| `magnetar.node.update` | star → Magnetar | capabilities + OS status sync |
+| `magnetar.os.desired.get` | star → Magnetar | pull desired OS image |
+| `magnetar.vms.desired.get` | host → Magnetar | pull desired VM set |
+| `magnetar.vms.status.set` | host → Magnetar | report VM status |
+| `<node-id>.os_update` | gravity → star (push) | fast-path OS update / rollback |
+| `<node-id>.join` | CP → star | Serf cluster join (`address|clusterId`) |
+| `<node-id>.configs`, `<node-id>.app_config` | Kuiper/Meridian → star | config delivery |
+
+gRPC: `StarConfig` served on `STAR_ADDRESS` (lab: `:11000`).
+
+## Configuration
+
+Read in `internal/configs/config.go`; on bootc nodes every variable comes from
+`/var/lib/c12s/node.env` (written by the provisioner / VM seed).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NATS_ADDRESS` | — (required) | NATS server (host:port) |
+| `STAR_ADDRESS` | — | gRPC listen address (lab: `:11000`) |
+| `NODE_ID_DIR_PATH` | `/var/lib/c12s` | node id directory |
+| `NODE_ID_FILE_NAME` | `nodeid` | node id file |
+| `BIND_ADDRESS` / `BIND_PORT` | — / `7946` | Serf bind |
+| `REGISTRATION_REQ_TIMEOUT_MILLISECONDS` | `5000` | per registration attempt |
+| `MAX_REGISTRATION_RETRIES` | `5` | registration attempts |
+| `OS_POLL_INTERVAL` | `30s` | bootc poller tick |
+| `SINGULARITY_URL` | — | artifact server base URL (qcow2 downloads) |
+| `VM_CACHE_DIR` | `/var/lib/star/qcow2` | qcow2 cache |
+| `VM_STATE_DIR` | `/var/lib/star/vms` | per-VM disks/seed |
+| `VM_POLL_INTERVAL` | `30s` | reconciler tick |
+| `VM_IP_BASE` | `192.168.122` | VM network base |
+| `VM_IP_OFFSET` | `100` | first static VM address |
+| `VM_NETWORK` | `default` | libvirt network name |
+| `VM_OS_VARIANT` | `fedora41` | `virt-install --os-variant` |
+
+## Build and run
+
+```bash
+go build ./...
+go test ./...        # unit tests (bootc, vm, magnetar API clients)
+go run ./cmd         # needs NATS_ADDRESS and a reachable Magnetar
+```
+
+On bootc nodes the binary is baked into the OS image
+(`tools/bootc/Containerfile.bootc`) and started by `star.service` with
+`EnvironmentFile=/var/lib/c12s/node.env`. On the lab dev machine, dockerized
+"simulated" nodes are started by `tools/start.sh` (`NODES_NUM`).
+
+## Status
+
+Stable and load-bearing for the thesis workflows: the config chain is
+original c12s code; the bootc module and VM reconciler were built and
+exercised in Phases 3–5 (E1–E7). Not production-hardened beyond the lab
+boundaries below.
+
+## Bugs, disabled and unfinished features
+
+### Confirmed bugs
+
+| Where | Effect |
+|---|---|
+| `internal/services/serf_agent.go` — `Join()` | Join address is hardcoded to port `7946` (`addr + ":7946"`), ignoring `BIND_PORT`. Joining fails if Serf was configured on any other port. |
+| `internal/store/config_inmem.go` | The config maps have no synchronization: Kuiper/Meridian async callbacks write while the gRPC server reads → data race (and possible map corruption) under concurrent delivery. |
+| `internal/store/nodeid_fs.go` | Node id and cluster id are written with mode `0666` (world-writable until umask applies). |
+| `internal/bootc/handler.go` | An invalid/unparseable `os_update` command gets **no reply**; gravity then reports `accepted:false` ("node offline?") instead of a rejection reason (review R4). |
+| `internal/bootc/poller.go` | With no desired image declared, the poller returns before reporting, so the node's phase in Magnetar goes stale (review R15). |
+| `internal/bootc/poller.go` | A failed switch (e.g. registry down) retries every tick with no backoff (review R7). |
+| During a normal update the node reports the transient sequence `switching → degraded → switching → healthy`; consumers must tolerate the transient `degraded` (review R8). |
+
+### Disabled / unfinished features
+
+- **qcow2 cache eviction** — never implemented: every downloaded disk version
+  is kept forever and filled host-1's `/var` until an OS update failed
+  (review R13). Manual cleanup of `/var/lib/star/qcow2` is the workaround.
+- **Cosign signature verification** is effectively off by default: the check
+  exists but the image ships neither `cosign` nor a public key, so the node
+  logs one line and degrades to digest-only integrity (DEV-7). Key
+  distribution is v2 work.
+- **App config from Meridian is received but never applied** — the payload is
+  logged and forwarded as a Serf user event; no apply path exists.
+- **VM manager calls have no timeouts** (`virsh`/`virt-install`/`qemu-img`)
+  — a hung libvirtd stalls the reconciler tick (review R6).
+- **Bootc poller state machine only partially unit-tested** (review R11);
+  regressions there are caught by multi-minute VM experiments instead.
+- **Run without `bootc` installed**: the `os_update`/`run_vms` paths are
+  capability-gated, so a plain node silently lacks OS management — expected,
+  but undocumented failure mode if the image forgot the binary.
+- `startSerfAgent` contains commented-out join-on-signal code and unused
+  `RunMock` calls (dead scaffolding).
+
+### PoC boundaries (by design, not bugs)
+
+- NATS is unauthenticated (review S1): anyone on the network can publish
+  `<node>.os_update` and switch any node's OS. Production answer: NATS
+  accounts / per-node credentials issued at enrollment.
+- The node-side gRPC `StarConfig` API has no authentication.
+- Update a libvirt host and its VMs in separate waves; a host reboot during
+  a VM's staging window is handled (re-stage, R17) but slows convergence.
+
+Design details, experiments and deviation history: `../plan/architecture.md`,
+`../plan/deviations.md`, `../plan/review.md` (thesis workspace).
