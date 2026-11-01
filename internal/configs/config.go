@@ -17,6 +17,7 @@ type Config struct {
 	serfBindAddress                    string
 	serfBindPort                       int
 	osPollInterval                     time.Duration
+	heartbeatInterval                  time.Duration
 	singularityUrl                     string
 	vmCacheDir                         string
 	vmStateDir                         string
@@ -63,6 +64,10 @@ func (c *Config) OsPollInterval() time.Duration {
 	return c.osPollInterval
 }
 
+func (c *Config) HeartbeatInterval() time.Duration {
+	return c.heartbeatInterval
+}
+
 func (c *Config) SingularityUrl() string {
 	return c.singularityUrl
 }
@@ -104,6 +109,9 @@ const (
 	defaultVmIpOffset    = 100
 	defaultVmNetwork     = "default"
 	defaultVmOsVariant   = "fedora41"
+	// Every node heartbeats so Magnetar can distinguish live records from
+	// stale ones; 30s keeps it cheap and well inside the stale threshold.
+	defaultHeartbeatInterval = 30 * time.Second
 )
 
 func NewFromEnv() (*Config, error) {
@@ -134,6 +142,10 @@ func NewFromEnv() (*Config, error) {
 	if err != nil {
 		log.Println(err)
 		osPollInterval = 30 * time.Second
+	}
+	heartbeatInterval, err := time.ParseDuration(os.Getenv("HEARTBEAT_INTERVAL"))
+	if err != nil || heartbeatInterval <= 0 {
+		heartbeatInterval = defaultHeartbeatInterval
 	}
 	vmCacheDir := os.Getenv("VM_CACHE_DIR")
 	if vmCacheDir == "" {
@@ -173,6 +185,7 @@ func NewFromEnv() (*Config, error) {
 		serfBindAddress:                    os.Getenv("BIND_ADDRESS"),
 		serfBindPort:                       serfBindPort,
 		osPollInterval:                     osPollInterval,
+		heartbeatInterval:                  heartbeatInterval,
 		singularityUrl:                     os.Getenv("SINGULARITY_URL"),
 		vmCacheDir:                         vmCacheDir,
 		vmStateDir:                         vmStateDir,

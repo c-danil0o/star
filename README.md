@@ -13,6 +13,7 @@ Star is the node end of every pipeline:
 | Pipeline | Flow |
 |---|---|
 | Configuration | Kuiper (config) / Meridian (app config) → NATS → **star** → Serf gossip → local gRPC store |
+| Liveness | **star** → `magnetar.node.heartbeat` every `HEARTBEAT_INTERVAL` → Magnetar's liveness view + stale-record GC |
 | OS updates | `cockpit image update` → gateway → gravity → Magnetar (recorded intent) + NATS push → **star** bootc module → `bootc switch` → reboot → greenboot verdict |
 | VM fleet | `cockpit vms set` → gateway → Magnetar (desired VMs) → **star** VM reconciler → libvirt VMs that themselves enroll as c12s nodes |
 
@@ -39,11 +40,15 @@ registration and on every status sync:
    (default `/var/lib/c12s/nodeid` — in `/var` so it survives every bootc
    update and rollback).
 3. If absent, register over NATS (`magnetar.registration`); store the UUID.
+   Re-registration **asserts the id star already has**, so Magnetar updates
+   (or recreates) the same record instead of minting a duplicate UUID — the
+   id file is never deleted to "start over".
 4. Sync capabilities and OS status (`magnetar.node.update`). Only an explicit
-   `notFound` reply means Magnetar forgot the node — star then re-registers.
-   A timeout/outage keeps the id (re-registering would orphan the node's org,
-   policies and VMs).
-5. Start capability modules, config servers, Serf listener.
+   `notFound` reply means Magnetar forgot the node — star then re-registers
+   with the same id. A timeout/outage keeps the id (re-registering would
+   orphan the node's org, policies and VMs).
+5. Start the heartbeat loop and capability modules, config servers, Serf
+   listener.
 6. `SIGTERM`/`SIGINT` → graceful stop.
 
 At startup the OS status sync is deliberately *skipped* when the bootc module
@@ -51,6 +56,16 @@ runs: the booted digest alone says nothing about greenboot's verdict, so the
 poller reports the real phase instead of a premature `healthy`.
 
 ## Modules
+
+### Heartbeat (always)
+
+Every node — regardless of capabilities — sends a heartbeat
+(`magnetar.node.heartbeat`) every `HEARTBEAT_INTERVAL` (default 30 s). It is
+the liveness signal for Magnetar's `online`/`stale`/`offline` view and the
+input to its stale-record GC, and it is how a node *without* the bootc module
+learns that the control plane lost its record: on a `found=false` reply star
+restarts once and re-registers with the same id. The heartbeat carries no
+state, so it can never race capability/OS-status reports.
 
 ### bootc (`internal/bootc`, capability `os_update`)
 
@@ -105,8 +120,9 @@ NATS subjects star uses (request/reply unless noted):
 
 | Subject | Direction | Purpose |
 |---|---|---|
-| `magnetar.registration` | star → Magnetar | enroll a new node |
+| `magnetar.registration` | star → Magnetar | enroll a node (re-asserts the stored id) |
 | `magnetar.node.update` | star → Magnetar | capabilities + OS status sync |
+| `magnetar.node.heartbeat` | star → Magnetar | liveness (all nodes); `found=false` ⇒ re-register |
 | `magnetar.os.desired.get` | star → Magnetar | pull desired OS image |
 | `magnetar.vms.desired.get` | host → Magnetar | pull desired VM set |
 | `magnetar.vms.status.set` | host → Magnetar | report VM status |
@@ -130,6 +146,7 @@ Read in `internal/configs/config.go`; on bootc nodes every variable comes from
 | `BIND_ADDRESS` / `BIND_PORT` | — / `7946` | Serf bind |
 | `REGISTRATION_REQ_TIMEOUT_MILLISECONDS` | `5000` | per registration attempt |
 | `MAX_REGISTRATION_RETRIES` | `5` | registration attempts |
+| `HEARTBEAT_INTERVAL` | `30s` | liveness heartbeat period |
 | `OS_POLL_INTERVAL` | `30s` | bootc poller tick |
 | `SINGULARITY_URL` | — | artifact server base URL (qcow2 downloads) |
 | `VM_CACHE_DIR` | `/var/lib/star/qcow2` | qcow2 cache |
@@ -145,6 +162,8 @@ Read in `internal/configs/config.go`; on bootc nodes every variable comes from
 ```bash
 go build ./...
 go test ./...        # unit tests (bootc, vm, magnetar API clients)
+C12S_NATS_TESTS=1 go test ./internal/services/   # live-NATS tests (create a
+                     # test node; see the cleanup note below)
 go run ./cmd         # needs NATS_ADDRESS and a reachable Magnetar
 ```
 
@@ -170,7 +189,7 @@ boundaries below.
 | `internal/store/config_inmem.go` | The config maps have no synchronization: Kuiper/Meridian async callbacks write while the gRPC server reads → data race (and possible map corruption) under concurrent delivery. |
 | `internal/store/nodeid_fs.go` | Node id and cluster id are written with mode `0666` (world-writable until umask applies). |
 | `internal/bootc/handler.go` | An invalid/unparseable `os_update` command gets **no reply**; gravity then reports `accepted:false` ("node offline?") instead of a rejection reason (review R4). |
-| `internal/bootc/poller.go` | With no desired image declared, the poller returns before reporting, so the node's phase in Magnetar goes stale (review R15). |
+| `internal/bootc/poller.go` | With no desired image declared, the poller returns before reporting, so the node's phase in Magnetar goes stale (review R15 — the heartbeat now tells such nodes when Magnetar forgot them, but no `unmanaged` phase is reported). |
 | `internal/bootc/poller.go` | A failed switch (e.g. registry down) retries every tick with no backoff (review R7). |
 | During a normal update the node reports the transient sequence `switching → degraded → switching → healthy`; consumers must tolerate the transient `degraded` (review R8). |
 
@@ -203,6 +222,10 @@ boundaries below.
 - The node-side gRPC `StarConfig` API has no authentication.
 - Update a libvirt host and its VMs in separate waves; a host reboot during
   a VM's staging window is handled (re-stage, R17) but slows convergence.
+- The live-NATS tests (`C12S_NATS_TESTS=1`) create a node with the fixed id
+  `11111111-1111-4111-8111-111111111111` in the target registry; delete it
+  afterwards with `cockpit delete node --node-id 11111111-...` (or etcdctl:
+  `nodes/pool/<id>`, `last_seen/<id>`, `labels/pool/*/<id>`).
 
 Design details, experiments and deviation history: `../plan/architecture.md`,
 `../plan/deviations.md`, `../plan/review.md` (thesis workspace).

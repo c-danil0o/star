@@ -95,11 +95,19 @@ func (a *app) init() {
 	if slices.Contains(capabilities, magnetarapi.CapabilityOsUpdate) {
 		syncStatus = nil
 	}
+	// A node that is unknown to Magnetar re-registers asserting the id it
+	// already has: the record is recreated with the same UUID instead of
+	// duplicating the node under a fresh one.
+	restartOnce := &sync.Once{}
+	restartForReRegister := func() {
+		restartOnce.Do(func() {
+			// re-registration happens at startup; the service manager restarts us
+			log.Println("node unknown to Magnetar, restarting to re-register")
+			_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		})
+	}
 	if !syncNodeState(nodeUpdateClient, nodeId.Value, capabilities, syncStatus) {
-		log.Println("node not found in Magnetar, re-registering")
-		if err := nodeIdStore.Delete(); err != nil {
-			log.Fatalln(err)
-		}
+		log.Println("node not found in Magnetar, re-registering with the same node id")
 		err = registrationService.Register(a.config.MaxRegistrationRetries(), time.Duration(a.config.RegistrationReqTimeoutMilliseconds())*time.Millisecond, a.config.SerfBindAddress(), capabilities, osStatus)
 		if err != nil {
 			log.Fatalln(err)
@@ -111,6 +119,19 @@ func (a *app) init() {
 		log.Println("re-registered with NODE ID: " + nodeId.Value)
 	}
 
+	// Heartbeats run for every node, independent of the modules below: they
+	// feed Magnetar's liveness view/GC and tell nodes without the bootc
+	// module that the control plane lost them.
+	heartbeatClient, err := magnetarapi.NewNodeHeartbeatAsyncClient(a.config.NatsAddress())
+	if err != nil {
+		log.Fatalln(err)
+	}
+	heartbeat := services.NewHeartbeatService(heartbeatClient, nodeId.Value, a.config.HeartbeatInterval())
+	heartbeat.SetUnknownNodeHandler(restartForReRegister)
+	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
+	a.shutdownProcesses = append(a.shutdownProcesses, heartbeatCancel)
+	go heartbeat.Run(heartbeatCtx)
+
 	if slices.Contains(capabilities, magnetarapi.CapabilityOsUpdate) {
 		log.Println("starting bootc module")
 		ctx, cancel := context.WithCancel(context.Background())
@@ -118,14 +139,7 @@ func (a *app) init() {
 
 		poller := bootc.NewPoller(a.config.OsPollInterval(), bootc.StateDir(), nil)
 		reporter := bootc.NewReporter(nodeUpdateClient, nodeId.Value, poller.Attempts())
-		var restartOnce sync.Once
-		reporter.SetUnknownNodeHandler(func() {
-			restartOnce.Do(func() {
-				// re-registration happens at startup; the service manager restarts us
-				log.Println("node unknown to Magnetar, restarting to re-register")
-				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
-			})
-		})
+		reporter.SetUnknownNodeHandler(restartForReRegister)
 		poller.SetStatusHandler(reporter.Report)
 		osClient, err := magnetarapi.NewOsAsyncClient(a.config.NatsAddress())
 		if err != nil {

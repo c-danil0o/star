@@ -30,6 +30,12 @@ func (rs *RegistrationService) Register(maxRetries int8, timeout time.Duration, 
 		log.Fatal(err)
 	}
 	req := rs.buildReq(bindAddress, capabilities, osStatus)
+	// Re-assert the id we already have (re-registration after a control-plane
+	// reset, or after the control plane lost our record): Magnetar then
+	// updates that record instead of minting a duplicate UUID.
+	if id, err := rs.nodeIdRepo.Get(); err == nil && id.Value != "" {
+		req.NodeId = id.Value
+	}
 	for attemptsLeft := maxRetries; attemptsLeft > 0; attemptsLeft-- {
 		err := rs.tryRegister(req, timeout)
 		if err == nil {
