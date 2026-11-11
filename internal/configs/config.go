@@ -26,11 +26,17 @@ type Config struct {
 	vmNetwork                          string
 	vmOsVariant                        string
 	diskRegistryUrl                    string
+	imageRegistry                      string
 }
 
 // DiskRegistryUrl is the artifact server bare VM disk names are fetched from.
 func (c *Config) DiskRegistryUrl() string {
 	return c.diskRegistryUrl
+}
+
+// ImageRegistry completes short OS image refs (host[:port], no scheme).
+func (c *Config) ImageRegistry() string {
+	return c.imageRegistry
 }
 
 func (c *Config) NatsAddress() string {
@@ -195,5 +201,6 @@ func NewFromEnv() (*Config, error) {
 		vmNetwork:                          vmNetwork,
 		vmOsVariant:                        vmOsVariant,
 		diskRegistryUrl:                    os.Getenv("DISK_REGISTRY_URL"),
+		imageRegistry:                      os.Getenv("IMAGE_REGISTRY"),
 	}, nil
 }

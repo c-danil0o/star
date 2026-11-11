@@ -138,6 +138,7 @@ func (a *app) init() {
 		a.shutdownProcesses = append(a.shutdownProcesses, cancel)
 
 		poller := bootc.NewPoller(a.config.OsPollInterval(), bootc.StateDir(), nil)
+		poller.SetImageRegistry(a.config.ImageRegistry())
 		reporter := bootc.NewReporter(nodeUpdateClient, nodeId.Value, poller.Attempts())
 		reporter.SetUnknownNodeHandler(restartForReRegister)
 		poller.SetStatusHandler(reporter.Report)

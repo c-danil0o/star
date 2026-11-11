@@ -18,6 +18,7 @@ type Poller struct {
 	statusHandler StatusCallback
 	source        DesiredSource
 	nodeId        string
+	imageRegistry string // completes short image refs (IMAGE_REGISTRY)
 }
 
 func NewPoller(interval time.Duration, stateDir string, statusHandler StatusCallback) *Poller {
@@ -27,6 +28,11 @@ func NewPoller(interval time.Duration, stateDir string, statusHandler StatusCall
 		attempts:      NewAttemptStore(stateDir),
 		statusHandler: statusHandler,
 	}
+}
+
+// SetImageRegistry sets the registry short image refs are pulled from.
+func (p *Poller) SetImageRegistry(registry string) {
+	p.imageRegistry = registry
 }
 
 func (p *Poller) Desired() *DesiredStore {
@@ -137,7 +143,19 @@ func (p *Poller) reconcile() {
 		}
 	}
 
-	if err := Verify(desired.ImageRef, desired.Digest); err != nil {
+	// the stored wish keeps the short ref; only the pull needs the registry
+	pullRef, err := ResolveImageRef(desired.ImageRef, p.imageRegistry)
+	if err != nil {
+		_ = p.attempts.Record(Attempt{
+			Image:     desired.ImageRef,
+			Digest:    desired.Digest,
+			Result:    magnetarapi.OsAttemptFailed,
+			Timestamp: time.Now().Unix(),
+		})
+		p.report(magnetarapi.OsPhaseDegraded, err.Error())
+		return
+	}
+	if err := Verify(pullRef, desired.Digest); err != nil {
 		_ = p.attempts.Record(Attempt{
 			Image:     desired.ImageRef,
 			Digest:    desired.Digest,
@@ -147,8 +165,8 @@ func (p *Poller) reconcile() {
 		p.report(magnetarapi.OsPhaseDegraded, "verification failed: "+err.Error())
 		return
 	}
-	p.report(magnetarapi.OsPhaseSwitching, "switching to "+desired.ImageRef+"@"+desired.Digest)
-	if err := Switch(desired.ImageRef, desired.Digest); err != nil {
+	p.report(magnetarapi.OsPhaseSwitching, "switching to "+pullRef+"@"+desired.Digest)
+	if err := Switch(pullRef, desired.Digest); err != nil {
 		_ = p.attempts.Record(Attempt{
 			Image:     desired.ImageRef,
 			Digest:    desired.Digest,
