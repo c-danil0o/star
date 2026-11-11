@@ -128,13 +128,11 @@ func TestBuildSeed(t *testing.T) {
 	}
 	dir := t.TempDir()
 	seed, err := BuildSeed(SeedSpec{
-		Dir:         dir,
-		Domain:      "vm-01",
-		MAC:         deterministicMAC("vm-01"),
-		Address:     "192.168.122.101",
-		Gateway:     "192.168.122.1",
-		NATSAddress: "192.168.122.1:4222",
-		Extras:      map[string]string{"SINGULARITY_URL": "http://192.168.122.1:8081"},
+		Dir:     dir,
+		Domain:  "vm-01",
+		MAC:     deterministicMAC("vm-01"),
+		Address: "192.168.122.101",
+		Gateway: "192.168.122.1",
 	})
 	if err != nil {
 		t.Fatalf("build seed: %v", err)
@@ -147,10 +145,12 @@ func TestBuildSeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"NATS_ADDRESS=192.168.122.1:4222", "SINGULARITY_URL=http://192.168.122.1:8081", "/var/lib/c12s/node.env"} {
-		if !strings.Contains(string(userData), want) {
-			t.Errorf("user-data missing %q", want)
-		}
+	if !strings.Contains(string(userData), "/var/lib/c12s/node.env") {
+		t.Error("user-data does not write node.env")
+	}
+	// control-plane addresses come from the image, not from the seed
+	if strings.Contains(string(userData), "NATS_ADDRESS") {
+		t.Error("user-data sets NATS_ADDRESS without an override")
 	}
 	networkConfig, err := os.ReadFile(filepath.Join(dir, "network-config"))
 	if err != nil {
@@ -158,6 +158,15 @@ func TestBuildSeed(t *testing.T) {
 	}
 	if !strings.Contains(string(networkConfig), `mac_address: "52:54:00:c1:2e:`) {
 		t.Error("network-config missing deterministic MAC match")
+	}
+}
+
+func TestNodeEnvLinesOverride(t *testing.T) {
+	got := strings.Join(nodeEnvLines("10.0.0.1:4222", map[string]string{"B": "2", "A": "1"}), "\n")
+	for _, want := range []string{"NATS_ADDRESS=10.0.0.1:4222", "A=1\nB=2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("node env missing %q in:\n%s", want, got)
+		}
 	}
 }
 

@@ -18,7 +18,6 @@ type Config struct {
 	serfBindPort                       int
 	osPollInterval                     time.Duration
 	heartbeatInterval                  time.Duration
-	singularityUrl                     string
 	vmCacheDir                         string
 	vmStateDir                         string
 	vmPollInterval                     time.Duration
@@ -66,10 +65,6 @@ func (c *Config) OsPollInterval() time.Duration {
 
 func (c *Config) HeartbeatInterval() time.Duration {
 	return c.heartbeatInterval
-}
-
-func (c *Config) SingularityUrl() string {
-	return c.singularityUrl
 }
 
 func (c *Config) VmCacheDir() string {
@@ -186,7 +181,6 @@ func NewFromEnv() (*Config, error) {
 		serfBindPort:                       serfBindPort,
 		osPollInterval:                     osPollInterval,
 		heartbeatInterval:                  heartbeatInterval,
-		singularityUrl:                     os.Getenv("SINGULARITY_URL"),
 		vmCacheDir:                         vmCacheDir,
 		vmStateDir:                         vmStateDir,
 		vmPollInterval:                     vmPollInterval,

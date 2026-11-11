@@ -6,14 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 // NoCloud seed generation for VMs created by the reconciler (phase-next.md
-// §2.6.6). Modeled on wormhole's provisioning seed, but the control-plane
-// addresses come from Star's own config: the host already knows them, so the
-// VMs it creates inherit them without any operator input.
+// §2.6.6). Modeled on wormhole's provisioning seed. The control-plane
+// addresses are not in the seed: the VMs boot the same OS image as every
+// node, which ships them in /usr/lib/c12s/node.env. The seed carries only
+// per-VM values (identity, network) and an optional NATS override.
 //
 // The seed is produced out of band of the control plane (D1): it writes
 // /var/lib/c12s/node.env inside the guest; the guest's own Star enrolls on
@@ -26,7 +28,7 @@ type SeedSpec struct {
 	MAC         string // deterministic MAC; the NIC is matched by this address
 	Address     string // static IPv4 for the guest
 	Gateway     string // gateway of the VM network
-	NATSAddress string // control-plane NATS address (from the host's config)
+	NATSAddress string // optional override; the default ships in the image
 	Extras      map[string]string
 }
 
@@ -38,9 +40,6 @@ func BuildSeed(spec SeedSpec) (string, error) {
 	}
 	if spec.MAC == "" || spec.Address == "" || spec.Gateway == "" {
 		return "", fmt.Errorf("seed for %s: mac, address and gateway are required", spec.Domain)
-	}
-	if spec.NATSAddress == "" {
-		return "", fmt.Errorf("seed for %s: NATS address is required", spec.Domain)
 	}
 	if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
 		return "", fmt.Errorf("create seed dir: %w", err)
@@ -120,20 +119,20 @@ config:
 	return seedPath, nil
 }
 
+// nodeEnvLines is the per-VM part of node.env; shared settings come from the
+// image's /usr/lib/c12s/node.env.
 func nodeEnvLines(natsAddress string, extras map[string]string) []string {
-	lines := []string{
-		"NATS_ADDRESS=" + natsAddress,
-		"NODE_ID_DIR_PATH=/var/lib/c12s",
-		"NODE_ID_FILE_NAME=nodeid",
-		"REGISTRATION_REQ_TIMEOUT_MILLISECONDS=10000",
-		"MAX_REGISTRATION_RETRIES=3",
-		"BIND_ADDRESS=0.0.0.0",
-		"BIND_PORT=7946",
-		"STAR_ADDRESS=:11000",
-		"OS_POLL_INTERVAL=30s",
+	lines := []string{"# per-node values; defaults: /usr/lib/c12s/node.env (image)"}
+	if natsAddress != "" {
+		lines = append(lines, "NATS_ADDRESS="+natsAddress)
 	}
-	for k, v := range extras {
-		lines = append(lines, k+"="+v)
+	keys := make([]string, 0, len(extras))
+	for k := range extras {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		lines = append(lines, k+"="+extras[k])
 	}
 	return lines
 }
