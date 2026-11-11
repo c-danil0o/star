@@ -155,7 +155,7 @@ Read in `internal/configs/config.go`; on bootc nodes every variable comes from
 | `VM_IP_BASE` | `192.168.122` | VM network base |
 | `VM_IP_OFFSET` | `100` | first static VM address |
 | `VM_NETWORK` | `default` | libvirt network name |
-| `VM_OS_VARIANT` | `fedora41` | `virt-install --os-variant` |
+| `VM_OS_VARIANT` | `fedora-unknown` | `virt-install --os-variant` |
 
 ## Build and run
 

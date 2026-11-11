@@ -109,7 +109,7 @@ const (
 	defaultVmIpBase      = "192.168.122"
 	defaultVmIpOffset    = 100
 	defaultVmNetwork     = "default"
-	defaultVmOsVariant   = "fedora41"
+	defaultVmOsVariant   = "fedora-unknown"
 	// Every node heartbeats so Magnetar can distinguish live records from
 	// stale ones; 30s keeps it cheap and well inside the stale threshold.
 	defaultHeartbeatInterval = 30 * time.Second

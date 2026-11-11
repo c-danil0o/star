@@ -20,7 +20,7 @@ import (
 const (
 	defaultConnectURI = "qemu:///system"
 	defaultNetwork    = "default"
-	defaultOSVariant  = "fedora41"
+	defaultOSVariant  = "fedora-unknown"
 	domainNamePrefix  = "c12s-vm-"
 	diskSizeGB        = 20
 )
