@@ -21,8 +21,11 @@ const (
 	defaultConnectURI = "qemu:///system"
 	defaultNetwork    = "default"
 	defaultOSVariant  = "fedora-unknown"
-	domainNamePrefix  = "c12s-vm-"
-	diskSizeGB        = 20
+	// host CPU without AMD-V/VT-x; QEMU accepts disabling the flag the CPU
+	// vendor does not have
+	plainCPU         = "host-passthrough,disable=svm,disable=vmx"
+	domainNamePrefix = "c12s-vm-"
+	diskSizeGB       = 20
 )
 
 type ManagerConfig struct {
@@ -127,6 +130,9 @@ func (m *Manager) Create(spec CreateSpec) error {
 		"--network", "network=" + m.cfg.Network + ",model=virtio,mac=" + spec.MAC,
 		"--os-variant", m.cfg.OSVariant,
 		"--graphics", "none",
+		// guests are plain nodes: no virtualization flags, so they have no
+		// /dev/kvm and do not report run_vms
+		"--cpu", plainCPU,
 	}
 	if m.cfg.UEFI {
 		// bootc-image-builder images are UEFI-only

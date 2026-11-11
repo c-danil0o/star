@@ -25,24 +25,34 @@ func discoverCapabilities() []string {
 	if commandExists("bootc") {
 		capabilities = append(capabilities, magnetarapi.CapabilityOsUpdate)
 	}
-	if libvirtSocketExists() {
+	if canRunVMs(libvirtSocketPaths, kvmDevice) {
 		capabilities = append(capabilities, magnetarapi.CapabilityRunVms)
 	}
 	return capabilities
 }
 
-func commandExists(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}
+// kvmDevice exists only where hardware virtualization reaches this OS: on
+// bare metal, or in a VM whose CPU passes the virtualization flags through.
+const kvmDevice = "/dev/kvm"
 
-func libvirtSocketExists() bool {
-	for _, path := range libvirtSocketPaths {
+// canRunVMs needs a libvirt daemon and /dev/kvm. libvirt is in every image,
+// so the socket alone is not enough: a VM without nested KVM has the socket
+// but cannot start guests.
+func canRunVMs(sockets []string, kvm string) bool {
+	if _, err := os.Stat(kvm); err != nil {
+		return false
+	}
+	for _, path := range sockets {
 		if _, err := os.Stat(path); err == nil {
 			return true
 		}
 	}
 	return false
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 // syncNodeState reports capabilities and OS status, and tells whether
