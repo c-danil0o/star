@@ -37,6 +37,8 @@ func (r *Reporter) Report(phase string, message string) {
 		osStatus.BootedImage = status.Image
 		osStatus.BootedDigest = status.Digest
 		osStatus.BootedVersion = status.Version
+		osStatus.RollbackImage = status.RollbackImage
+		osStatus.RollbackDigest = status.RollbackDigest
 	}
 	if last := r.attempts.Last(); last != nil {
 		osStatus.LastAttempt = &magnetarapi.OsAttempt{
