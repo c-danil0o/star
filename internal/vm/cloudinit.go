@@ -23,12 +23,14 @@ import (
 
 // SeedSpec describes one VM's first-boot configuration.
 type SeedSpec struct {
-	Dir         string // per-VM directory for meta-data/user-data/network-config/seed.iso
-	Domain      string // libvirt domain name (also cloud-init instance-id)
-	MAC         string // deterministic MAC; the NIC is matched by this address
-	Address     string // static IPv4 for the guest
-	Gateway     string // gateway of the VM network
-	NATSAddress string // optional override; the default ships in the image
+	Dir         string            // per-VM directory for meta-data/user-data/network-config/seed.iso
+	Domain      string            // libvirt domain name (also cloud-init instance-id)
+	MAC         string            // deterministic MAC; the NIC is matched by this address
+	Address     string            // static IPv4 for the guest
+	Gateway     string            // gateway of the VM network
+	NATSAddress string            // optional override; the default ships in the image
+	NodeID      string            // written to /var/lib/c12s/nodeid: the VM registers with this id
+	Labels      map[string]string // NODE_LABELS: string labels the VM's star registers with
 	Extras      map[string]string
 }
 
@@ -71,9 +73,9 @@ write_files:
     permissions: '0644'
     content: |
 %s
-runcmd:
+%sruncmd:
   - systemctl enable --now serial-getty@ttyS0.service
-`, indent(strings.Join(nodeEnvLines(spec.NATSAddress, spec.Extras), "\n"), "      "))
+`, indent(strings.Join(nodeEnvLines(spec.NATSAddress, seedEnv(spec)), "\n"), "      "), nodeIDFile(spec.NodeID))
 
 	networkConfig := fmt.Sprintf(`version: 1
 config:
@@ -117,6 +119,36 @@ config:
 		return "", fmt.Errorf("build seed iso (xorriso): %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return seedPath, nil
+}
+
+// seedEnv is the per-VM env: the caller's extras plus NODE_LABELS.
+func seedEnv(spec SeedSpec) map[string]string {
+	env := map[string]string{}
+	for k, v := range spec.Extras {
+		env[k] = v
+	}
+	if len(spec.Labels) > 0 {
+		keys := make([]string, 0, len(spec.Labels))
+		for k := range spec.Labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		pairs := make([]string, 0, len(keys))
+		for _, k := range keys {
+			pairs = append(pairs, k+"="+spec.Labels[k])
+		}
+		env["NODE_LABELS"] = strings.Join(pairs, ",")
+	}
+	return env
+}
+
+// nodeIDFile is the write_files entry that fixes the VM's node id; empty
+// when no id is set (the VM's star then generates one).
+func nodeIDFile(id string) string {
+	if id == "" {
+		return ""
+	}
+	return fmt.Sprintf("  - path: /var/lib/c12s/nodeid\n    permissions: '0644'\n    content: %q\n", id)
 }
 
 // nodeEnvLines is the per-VM part of node.env; shared settings come from the

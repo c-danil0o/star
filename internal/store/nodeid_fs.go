@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/c12s/star/internal/domain"
 )
@@ -35,7 +36,7 @@ func (n nodeIdFSStore) Get() (*domain.NodeId, error) {
 		return nil, err
 	}
 	return &domain.NodeId{
-		Value: string(fileContents),
+		Value: strings.TrimSpace(string(fileContents)),
 	}, nil
 }
 

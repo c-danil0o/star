@@ -25,25 +25,27 @@ const desiredTimeout = 10 * time.Second
 // Safety rule: when the desired set cannot be fetched (CP down, timeout), the
 // tick is skipped entirely — a transient failure must never destroy VMs.
 type Reconciler struct {
-	client      *magnetarapi.VmAsyncClient
-	hostId      string
-	cache       *Qcow2Cache
-	manager     *Manager
-	interval    time.Duration
-	ipBase      string
-	ipOffset    int
-	natsAddress string
+	client          *magnetarapi.VmAsyncClient
+	hostId          string
+	cache           *Qcow2Cache
+	manager         *Manager
+	interval        time.Duration
+	ipBase          string
+	ipOffset        int
+	natsAddress     string
+	diskRegistryURL string
 }
 
 type ReconcilerConfig struct {
-	HostId        string
-	Interval      time.Duration
-	CacheDir      string
-	StateDir      string
-	IPBase        string
-	IPOffset      int
-	NATSAddress   string
-	ManagerConfig ManagerConfig
+	HostId          string
+	Interval        time.Duration
+	CacheDir        string
+	StateDir        string
+	IPBase          string
+	IPOffset        int
+	NATSAddress     string
+	DiskRegistryURL string // where bare disk names are downloaded from
+	ManagerConfig   ManagerConfig
 }
 
 func NewReconciler(cfg ReconcilerConfig) (*Reconciler, error) {
@@ -68,14 +70,15 @@ func NewReconciler(cfg ReconcilerConfig) (*Reconciler, error) {
 		return nil, err
 	}
 	return &Reconciler{
-		client:      client,
-		hostId:      cfg.HostId,
-		cache:       NewQcow2Cache(cfg.CacheDir),
-		manager:     manager,
-		interval:    cfg.Interval,
-		ipBase:      cfg.IPBase,
-		ipOffset:    cfg.IPOffset,
-		natsAddress: cfg.NATSAddress,
+		client:          client,
+		hostId:          cfg.HostId,
+		cache:           NewQcow2Cache(cfg.CacheDir),
+		manager:         manager,
+		interval:        cfg.Interval,
+		ipBase:          cfg.IPBase,
+		ipOffset:        cfg.IPOffset,
+		natsAddress:     cfg.NATSAddress,
+		diskRegistryURL: cfg.DiskRegistryURL,
 	}, nil
 }
 
@@ -163,7 +166,15 @@ func (r *Reconciler) ensure(spec *magnetarapi.DesiredVm, addresses map[string]st
 	}
 
 	log.Printf("[vm] creating VM %s", spec.Name)
-	diskPath, err := r.cache.Ensure(spec.Qcow2Url, spec.Digest)
+	url, err := diskURL(spec.Qcow2Url, r.diskRegistryURL)
+	if err != nil {
+		return err
+	}
+	diskPath, err := r.cache.Ensure(url, spec.Digest)
+	if err != nil {
+		return err
+	}
+	nodeID, err := VMNodeID(r.hostId, spec.Name)
 	if err != nil {
 		return err
 	}
@@ -174,6 +185,8 @@ func (r *Reconciler) ensure(spec *magnetarapi.DesiredVm, addresses map[string]st
 		MAC:     mac,
 		Address: address,
 		Gateway: gatewayFromBase(r.ipBase),
+		NodeID:  nodeID,
+		Labels:  map[string]string{"vm-host": r.hostId, "vm-name": spec.Name},
 	})
 	if err != nil {
 		return err

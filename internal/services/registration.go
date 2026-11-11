@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	magnetarapi "github.com/c12s/magnetar/pkg/api"
@@ -118,6 +120,11 @@ func (rs *RegistrationService) buildReq(bindAddress string, capabilities []strin
 	if err == nil {
 		builder = builder.AddFloat64Label("memory-totalGB", memoryTotalGB)
 	}
+	// NODE_LABELS (from the seed) lets a provisioner tag the node, e.g. a VM
+	// with its host, so it can be claimed precisely
+	for key, value := range parseNodeLabels(os.Getenv("NODE_LABELS")) {
+		builder = builder.AddStringLabel(key, value)
+	}
 	req := builder.Request()
 	req.Resources["mem"] = memoryTotalGB
 	req.Resources["cpu"] = cpuCores
@@ -131,4 +138,18 @@ func (rs *RegistrationService) Registered() bool {
 		return false
 	}
 	return true
+}
+
+// parseNodeLabels reads "k1=v1,k2=v2"; malformed entries are skipped.
+func parseNodeLabels(raw string) map[string]string {
+	labels := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		key, value, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if !ok || key == "" || value == "" {
+			continue
+		}
+		labels[key] = value
+	}
+	return labels
 }

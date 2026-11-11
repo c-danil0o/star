@@ -25,6 +25,12 @@ type Config struct {
 	vmIpOffset                         int
 	vmNetwork                          string
 	vmOsVariant                        string
+	diskRegistryUrl                    string
+}
+
+// DiskRegistryUrl is the artifact server bare VM disk names are fetched from.
+func (c *Config) DiskRegistryUrl() string {
+	return c.diskRegistryUrl
 }
 
 func (c *Config) NatsAddress() string {
@@ -188,5 +194,6 @@ func NewFromEnv() (*Config, error) {
 		vmIpOffset:                         vmIpOffset,
 		vmNetwork:                          vmNetwork,
 		vmOsVariant:                        vmOsVariant,
+		diskRegistryUrl:                    os.Getenv("DISK_REGISTRY_URL"),
 	}, nil
 }

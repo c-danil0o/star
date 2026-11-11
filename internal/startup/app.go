@@ -162,13 +162,14 @@ func (a *app) init() {
 		a.shutdownProcesses = append(a.shutdownProcesses, cancel)
 
 		reconciler, err := vm.NewReconciler(vm.ReconcilerConfig{
-			HostId:      nodeId.Value,
-			Interval:    a.config.VmPollInterval(),
-			CacheDir:    a.config.VmCacheDir(),
-			StateDir:    a.config.VmStateDir(),
-			IPBase:      a.config.VmIpBase(),
-			IPOffset:    a.config.VmIpOffset(),
-			NATSAddress: a.config.NatsAddress(),
+			HostId:          nodeId.Value,
+			Interval:        a.config.VmPollInterval(),
+			CacheDir:        a.config.VmCacheDir(),
+			StateDir:        a.config.VmStateDir(),
+			IPBase:          a.config.VmIpBase(),
+			IPOffset:        a.config.VmIpOffset(),
+			NATSAddress:     a.config.NatsAddress(),
+			DiskRegistryURL: a.config.DiskRegistryUrl(),
 			ManagerConfig: vm.ManagerConfig{
 				Network:   a.config.VmNetwork(),
 				OSVariant: a.config.VmOsVariant(),
