@@ -19,6 +19,7 @@ type Poller struct {
 	source        DesiredSource
 	nodeId        string
 	imageRegistry string // completes short image refs (IMAGE_REGISTRY)
+	probe         func() *Status
 }
 
 func NewPoller(interval time.Duration, stateDir string, statusHandler StatusCallback) *Poller {
@@ -27,6 +28,7 @@ func NewPoller(interval time.Duration, stateDir string, statusHandler StatusCall
 		desired:       NewDesiredStore(stateDir),
 		attempts:      NewAttemptStore(stateDir),
 		statusHandler: statusHandler,
+		probe:         ProbeStatus,
 	}
 }
 
@@ -72,12 +74,15 @@ func (p *Poller) Run(ctx context.Context) {
 func (p *Poller) reconcile() {
 	p.pullDesired()
 	desired := p.desired.Get()
-	if desired == nil {
-		return
-	}
-	status := ProbeStatus()
+	status := p.probe()
 	if status == nil {
 		p.report(magnetarapi.OsPhaseDegraded, "bootc status unavailable")
+		return
+	}
+	if desired == nil {
+		// nothing to reconcile, but keep the control plane's view current:
+		// after `image rollback` it would otherwise show the old image (R15)
+		p.report(magnetarapi.OsPhaseUnmanaged, "no desired image declared; running "+status.Image+"@"+status.Digest)
 		return
 	}
 	bootID := CurrentBootID()
