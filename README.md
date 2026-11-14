@@ -31,7 +31,10 @@ registration and on every status sync:
 | `config` | always | Kuiper/Meridian async clients, Serf, gRPC config server |
 | `gossip` | always | Serf agent + cluster-join listener |
 | `os_update` | `bootc` in PATH | bootc module (poller + `os_update` handler + reporter) |
-| `run_vms` | libvirt socket exists (`libvirtd` or `virtqemud`) | VM reconciler |
+| `run_vms` | libvirt socket exists (`libvirtd` or `virtqemud`) **and** `/dev/kvm` exists | VM reconciler |
+
+libvirt ships in every image, so `/dev/kvm` is what tells a VM host from a
+plain node (a nested VM without KVM passthrough reports no `run_vms`).
 
 ## Lifecycle
 
@@ -82,22 +85,38 @@ state, so it can never race capability/OS-status reports.
   never retried automatically; a new declaration (or pulled change) lifts it.
 - **Drift.** Out-of-band OS changes are detected on the next tick and
   reconciled back to the desired image.
+- **Short refs.** A ref without a registry host (`os/edge-base:v4.1`) is
+  completed with `IMAGE_REGISTRY` from the image's node defaults; a ref that
+  names a host is used as is.
 - **Handler.** NATS subject `<node-id>.os_update` (fast path, from gravity)
-  accepts an image update or `rollback` — rollback clears the intent and runs
-  `bootc rollback`.
+  accepts an image update. It also still accepts the older `rollback`
+  command (clears the intent, runs `bootc rollback`); `cockpit image
+  rollback` no longer sends it: it declares the node's previous deployment as
+  the desired image, so the node rolls back through the normal update path
+  and stays managed.
 - **State files** (mode 0600): `/var/lib/c12s/os_desired.json`,
   `/var/lib/c12s/os_attempt.json`.
 - **Reports** to Magnetar via `magnetar.node.update`:
-  `{healthy, switching, degraded, rolled_back}`.
+  `{healthy, switching, degraded, rolled_back, unmanaged}` plus the booted
+  image and bootc's rollback deployment (image + digest). `unmanaged`: no
+  desired image is declared; the node reports what it booted and nothing
+  reconciles it.
 
 ### VM reconciler (`internal/vm`, capability `run_vms`)
 
 - Polls `magnetar.vms.desired.get` every `VM_POLL_INTERVAL`; diffs against
   the libvirt domain list.
-- Missing VM: download qcow2 from `SINGULARITY_URL` into `VM_CACHE_DIR`
-  (sha256-verified, atomic rename of temp download), generate a NoCloud seed
-  (`cloud-init` user-data + network-config, deterministic MAC/IP), then
-  `virt-install --import` (UEFI — bootc-image-builder images are UEFI-only).
+- Missing VM: download the qcow2 into `VM_CACHE_DIR` (sha256-verified,
+  atomic rename of temp download). A disk given by artifact name
+  (`edge-base-v4.0.qcow2`) is fetched from `DISK_REGISTRY_URL`; a full
+  `http(s)` URL is used as is. Then generate a NoCloud seed (`cloud-init`
+  user-data + network-config, deterministic MAC/IP) and `virt-install
+  --import` (UEFI — bootc-image-builder images are UEFI-only; plain CPU
+  model, no nested virtualization).
+- **VM identity.** A VM's node id is UUIDv5(host node id, VM name), known
+  before the VM exists. The seed writes it to the VM's
+  `/var/lib/c12s/nodeid` together with `NODE_LABELS` (`vm-host=<host id>`,
+  `vm-name=<name>`), so a re-created VM keeps its id, org and OS intent.
 - Crashed VM: `virsh start`. No longer desired: `virsh destroy` + `undefine`.
 - Reports observed state with `magnetar.vms.status.set`.
 - VMs boot into their own Star, enroll as first-class nodes, and get their
@@ -134,8 +153,11 @@ gRPC: `StarConfig` served on `STAR_ADDRESS` (lab: `:11000`).
 
 ## Configuration
 
-Read in `internal/configs/config.go`; on bootc nodes every variable comes from
-`/var/lib/c12s/node.env` (written by the provisioner / VM seed).
+Read in `internal/configs/config.go`. On bootc nodes `star.service` loads two
+files: `/usr/lib/c12s/node.env` (defaults shipped in the OS image, so every
+update delivers them: control-plane addresses, agent settings) and then
+`/var/lib/c12s/node.env` (per-node values from the cloud-init seed; a key set
+there wins).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -148,7 +170,9 @@ Read in `internal/configs/config.go`; on bootc nodes every variable comes from
 | `MAX_REGISTRATION_RETRIES` | `5` | registration attempts |
 | `HEARTBEAT_INTERVAL` | `30s` | liveness heartbeat period |
 | `OS_POLL_INTERVAL` | `30s` | bootc poller tick |
-| `SINGULARITY_URL` | — | artifact server base URL (qcow2 downloads) |
+| `IMAGE_REGISTRY` | — | registry host:port that completes short image refs (lab image: `192.168.122.1:5001`) |
+| `DISK_REGISTRY_URL` | — | disk registry base URL; VM disks given by name are fetched from it (lab image: `http://192.168.122.1:8081`) |
+| `NODE_LABELS` | — | `key=value,…` labels sent at registration (set by the VM seed) |
 | `VM_CACHE_DIR` | `/var/lib/star/qcow2` | qcow2 cache |
 | `VM_STATE_DIR` | `/var/lib/star/vms` | per-VM disks/seed |
 | `VM_POLL_INTERVAL` | `30s` | reconciler tick |
@@ -168,8 +192,9 @@ go run ./cmd         # needs NATS_ADDRESS and a reachable Magnetar
 ```
 
 On bootc nodes the binary is baked into the OS image
-(`tools/bootc/Containerfile.bootc`) and started by `star.service` with
-`EnvironmentFile=/var/lib/c12s/node.env`. On the lab dev machine, dockerized
+(`tools/bootc/Containerfile.bootc`) and started by `star.service` with both
+`EnvironmentFile`s above. `starometry.service` runs next to it and serves the
+node's metrics. On the lab dev machine, dockerized
 "simulated" nodes are started by `tools/start.sh` (`NODES_NUM`).
 
 ## Status
@@ -189,14 +214,13 @@ boundaries below.
 | `internal/store/config_inmem.go` | The config maps have no synchronization: Kuiper/Meridian async callbacks write while the gRPC server reads → data race (and possible map corruption) under concurrent delivery. |
 | `internal/store/nodeid_fs.go` | Node id and cluster id are written with mode `0666` (world-writable until umask applies). |
 | `internal/bootc/handler.go` | An invalid/unparseable `os_update` command gets **no reply**; gravity then reports `accepted:false` ("node offline?") instead of a rejection reason (review R4). |
-| `internal/bootc/poller.go` | With no desired image declared, the poller returns before reporting, so the node's phase in Magnetar goes stale (review R15 — the heartbeat now tells such nodes when Magnetar forgot them, but no `unmanaged` phase is reported). |
 | `internal/bootc/poller.go` | A failed switch (e.g. registry down) retries every tick with no backoff (review R7). |
 | During a normal update the node reports the transient sequence `switching → degraded → switching → healthy`; consumers must tolerate the transient `degraded` (review R8). |
 
 ### Disabled / unfinished features
 
 - **qcow2 cache eviction** — never implemented: every downloaded disk version
-  is kept forever and filled host-1's `/var` until an OS update failed
+  is kept forever and filled the VM host's `/var` until an OS update failed
   (review R13). Manual cleanup of `/var/lib/star/qcow2` is the workaround.
 - **Cosign signature verification** is effectively off by default: the check
   exists but the image ships neither `cosign` nor a public key, so the node
