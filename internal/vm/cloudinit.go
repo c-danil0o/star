@@ -17,7 +17,7 @@ import (
 // node, which ships them in /usr/lib/c12s/node.env. The seed carries only
 // per-VM values (identity, network) and an optional NATS override.
 //
-// The seed is produced out of band of the control plane (D1): it writes
+// The seed is produced out of band of the control plane: it writes
 // /var/lib/c12s/node.env inside the guest; the guest's own Star enrolls on
 // first boot exactly like a bare-metal node.
 
@@ -170,7 +170,7 @@ func nodeEnvLines(natsAddress string, extras map[string]string) []string {
 }
 
 // deterministicMAC maps a VM name to a stable locally-administered MAC in the
-// QEMU/KVM OUI (52:54:00). Same scheme as the provisioning helper (DEV-9) so
+// QEMU/KVM OUI (52:54:00). Same scheme as the provisioning helper (wormhole) so
 // a VM's address is reproducible from its name alone.
 func deterministicMAC(name string) string {
 	h := fnv.New32a()
@@ -180,7 +180,7 @@ func deterministicMAC(name string) string {
 }
 
 // staticAddress derives a stable IPv4 from the VM name: trailing digits
-// offset ipBase+offset (node-1 with base 192.168.122 and offset 100 →
+// offset ipBase+offset (vm-1 with base 192.168.122 and offset 100 →
 // 192.168.122.101). Names without digits hash into the pool.
 func staticAddress(name, ipBase string, offset int) (string, error) {
 	digits := ""

@@ -8,7 +8,7 @@ import (
 )
 
 // After `image rollback` the control plane declares no image. The node must
-// still report what it booted, or Magnetar keeps showing the old image (R15).
+// still report what it booted, or Magnetar keeps showing the old image.
 func TestReconcileReportsUnmanaged(t *testing.T) {
 	var phase, message string
 	p := NewPoller(0, t.TempDir(), func(ph, msg string) { phase, message = ph, msg })

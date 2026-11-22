@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Verification happens before every switch (plan Phase 3.3):
+// Verification happens before every switch:
 //
 //   - digest: the desired state is digest-pinned and handed to bootc as
 //     ref@sha256:... — bootc itself refuses to fetch anything whose manifest

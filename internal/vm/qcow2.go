@@ -18,8 +18,8 @@ import (
 // locally, keyed by their sha256 digest (phase-next.md §2.3 Q3). The digest is
 // authoritative: virt-install only ever sees a file whose bytes hash to it.
 //
-// The cache is "keep all, no eviction" for the PoC; images are ~1.3 GB and a
-// lab host has room for a handful of versions.
+// The cache keeps every version (no eviction); images are ~1.3 GB, so old
+// versions have to be removed from the cache directory by hand.
 type Qcow2Cache struct {
 	cacheDir string
 	client   *http.Client

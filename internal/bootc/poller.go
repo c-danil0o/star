@@ -81,7 +81,7 @@ func (p *Poller) reconcile() {
 	}
 	if desired == nil {
 		// nothing to reconcile, but keep the control plane's view current:
-		// after `image rollback` it would otherwise show the old image (R15)
+		// after `image rollback` it would otherwise show the old image
 		p.report(magnetarapi.OsPhaseUnmanaged, "no desired image declared; running "+status.Image+"@"+status.Digest)
 		return
 	}

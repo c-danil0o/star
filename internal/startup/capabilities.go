@@ -12,8 +12,7 @@ import (
 )
 
 // libvirtSocketPaths covers both daemon layouts: the monolithic libvirtd
-// socket and the modular virtqemud socket (default on modern Fedora and on
-// this lab host). The VM reconciler shells out to virsh/virt-install, which
+// socket and the modular virtqemud socket (default on modern Fedora). The VM reconciler shells out to virsh/virt-install, which
 // reach either daemon transparently.
 var libvirtSocketPaths = []string{
 	"/var/run/libvirt/libvirt-sock",
