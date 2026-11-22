@@ -149,7 +149,7 @@ NATS subjects star uses (request/reply unless noted):
 | `<node-id>.join` | CP → star | Serf cluster join (`address|clusterId`) |
 | `<node-id>.configs`, `<node-id>.app_config` | Kuiper/Meridian → star | config delivery |
 
-gRPC: `StarConfig` served on `STAR_ADDRESS` (lab: `:11000`).
+gRPC: `StarConfig` served on `STAR_ADDRESS` (e.g. `:11000`).
 
 ## Configuration
 
@@ -162,7 +162,7 @@ there wins).
 | Variable | Default | Purpose |
 |---|---|---|
 | `NATS_ADDRESS` | — (required) | NATS server (host:port) |
-| `STAR_ADDRESS` | — | gRPC listen address (lab: `:11000`) |
+| `STAR_ADDRESS` | — | gRPC listen address (e.g. `:11000`) |
 | `NODE_ID_DIR_PATH` | `/var/lib/c12s` | node id directory |
 | `NODE_ID_FILE_NAME` | `nodeid` | node id file |
 | `BIND_ADDRESS` / `BIND_PORT` | — / `7946` | Serf bind |
@@ -170,8 +170,8 @@ there wins).
 | `MAX_REGISTRATION_RETRIES` | `5` | registration attempts |
 | `HEARTBEAT_INTERVAL` | `30s` | liveness heartbeat period |
 | `OS_POLL_INTERVAL` | `30s` | bootc poller tick |
-| `IMAGE_REGISTRY` | — | registry host:port that completes short image refs (lab image: `192.168.122.1:5001`) |
-| `DISK_REGISTRY_URL` | — | disk registry base URL; VM disks given by name are fetched from it (lab image: `http://192.168.122.1:8081`) |
+| `IMAGE_REGISTRY` | — | registry host:port that completes short image refs (e.g. `registry.example:5001`) |
+| `DISK_REGISTRY_URL` | — | disk registry base URL; VM disks given by name are fetched from it (e.g. `http://registry.example:8081`) |
 | `NODE_LABELS` | — | `key=value,…` labels sent at registration (set by the VM seed) |
 | `VM_CACHE_DIR` | `/var/lib/star/qcow2` | qcow2 cache |
 | `VM_STATE_DIR` | `/var/lib/star/vms` | per-VM disks/seed |
@@ -186,70 +186,17 @@ there wins).
 ```bash
 go build ./...
 go test ./...        # unit tests (bootc, vm, magnetar API clients)
-C12S_NATS_TESTS=1 go test ./internal/services/   # live-NATS tests (create a
-                     # test node; see the cleanup note below)
+C12S_NATS_TESTS=1 go test ./internal/services/   # live-NATS tests (need a
+                     # running control plane; they register a test node)
 go run ./cmd         # needs NATS_ADDRESS and a reachable Magnetar
 ```
+
+The live-NATS tests create a node with the fixed id
+`11111111-1111-4111-8111-111111111111`; remove it afterwards with
+`cockpit delete node --node-id 11111111-1111-4111-8111-111111111111`.
 
 On bootc nodes the binary is baked into the OS image
 (`tools/bootc/Containerfile.bootc`) and started by `star.service` with both
 `EnvironmentFile`s above. `starometry.service` runs next to it and serves the
-node's metrics. On the lab dev machine, dockerized
+node's metrics. For local development, dockerized
 "simulated" nodes are started by `tools/start.sh` (`NODES_NUM`).
-
-## Status
-
-Stable and load-bearing for the thesis workflows: the config chain is
-original c12s code; the bootc module and VM reconciler were built and
-exercised in Phases 3–5 (E1–E7). Not production-hardened beyond the lab
-boundaries below.
-
-## Bugs, disabled and unfinished features
-
-### Confirmed bugs
-
-| Where | Effect |
-|---|---|
-| `internal/services/serf_agent.go` — `Join()` | Join address is hardcoded to port `7946` (`addr + ":7946"`), ignoring `BIND_PORT`. Joining fails if Serf was configured on any other port. |
-| `internal/store/config_inmem.go` | The config maps have no synchronization: Kuiper/Meridian async callbacks write while the gRPC server reads → data race (and possible map corruption) under concurrent delivery. |
-| `internal/store/nodeid_fs.go` | Node id and cluster id are written with mode `0666` (world-writable until umask applies). |
-| `internal/bootc/handler.go` | An invalid/unparseable `os_update` command gets **no reply**; gravity then reports `accepted:false` ("node offline?") instead of a rejection reason (review R4). |
-| `internal/bootc/poller.go` | A failed switch (e.g. registry down) retries every tick with no backoff (review R7). |
-| During a normal update the node reports the transient sequence `switching → degraded → switching → healthy`; consumers must tolerate the transient `degraded` (review R8). |
-
-### Disabled / unfinished features
-
-- **qcow2 cache eviction** — never implemented: every downloaded disk version
-  is kept forever and filled the VM host's `/var` until an OS update failed
-  (review R13). Manual cleanup of `/var/lib/star/qcow2` is the workaround.
-- **Cosign signature verification** is effectively off by default: the check
-  exists but the image ships neither `cosign` nor a public key, so the node
-  logs one line and degrades to digest-only integrity (DEV-7). Key
-  distribution is v2 work.
-- **App config from Meridian is received but never applied** — the payload is
-  logged and forwarded as a Serf user event; no apply path exists.
-- **VM manager calls have no timeouts** (`virsh`/`virt-install`/`qemu-img`)
-  — a hung libvirtd stalls the reconciler tick (review R6).
-- **Bootc poller state machine only partially unit-tested** (review R11);
-  regressions there are caught by multi-minute VM experiments instead.
-- **Run without `bootc` installed**: the `os_update`/`run_vms` paths are
-  capability-gated, so a plain node silently lacks OS management — expected,
-  but undocumented failure mode if the image forgot the binary.
-- `startSerfAgent` contains commented-out join-on-signal code and unused
-  `RunMock` calls (dead scaffolding).
-
-### PoC boundaries (by design, not bugs)
-
-- NATS is unauthenticated (review S1): anyone on the network can publish
-  `<node>.os_update` and switch any node's OS. Production answer: NATS
-  accounts / per-node credentials issued at enrollment.
-- The node-side gRPC `StarConfig` API has no authentication.
-- Update a libvirt host and its VMs in separate waves; a host reboot during
-  a VM's staging window is handled (re-stage, R17) but slows convergence.
-- The live-NATS tests (`C12S_NATS_TESTS=1`) create a node with the fixed id
-  `11111111-1111-4111-8111-111111111111` in the target registry; delete it
-  afterwards with `cockpit delete node --node-id 11111111-...` (or etcdctl:
-  `nodes/pool/<id>`, `last_seen/<id>`, `labels/pool/*/<id>`).
-
-Design details, experiments and deviation history: `../plan/architecture.md`,
-`../plan/deviations.md`, `../plan/review.md` (thesis workspace).
